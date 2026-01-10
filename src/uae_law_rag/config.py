@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     DEEPSEEK_REASONER_MODEL: str = "deepseek-reasoner"
 
     OLLAMA_CHAT_MODEL: str = "qwen3:4b"
-    OLLAMA_EMBED_MODEL: str = "qwen3-embedding:4b"    
+    OLLAMA_EMBED_MODEL: str = "qwen3-embedding:4b"
 
     DEVICE: str = "auto"
 
@@ -32,11 +32,7 @@ class Settings(BaseSettings):
             raise RuntimeError("PROJECT_ROOT is not set. Please set PROJECT_ROOT in your .env file.")
         return Path(self.PROJECT_ROOT).resolve()
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")
+
 
 settings = Settings()

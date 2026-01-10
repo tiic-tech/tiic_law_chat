@@ -1,0 +1,20 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --ignore, "E402,E501,W291,W292,W293,E203"]
+        files: '\.py$'  # Only check Python files
+      - id: ruff-format
+        files: '\.py$'  # Only format Python files
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$|\.txt$|\.csv$|\.tsv$|\.toml$'  # Exclude toml files
+      - id: end-of-file-fixer
+        exclude: '\.png$|\.jpg$|\.jpeg$|\.gif$|\.bin$|\.toml$'  # Exclude toml files
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
