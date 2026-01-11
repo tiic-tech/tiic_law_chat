@@ -33,7 +33,6 @@ uv.lock
 *.safetensors
 *.h5
 *.onnx
-models/
 
 # Runtime cache
 cache/
