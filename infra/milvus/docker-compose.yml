@@ -68,6 +68,18 @@ services:
       timeout: 5s
       retries: 24
 
+  attu:
+    image: zilliz/attu:latest
+    container_name: uae-law-rag-attu
+    depends_on:
+      milvus:
+        condition: service_healthy
+    environment:
+      - MILVUS_URL=milvus:19530
+    ports:
+      - "8000:3000"   # Attu Web UI
+    restart: unless-stopped
+
 volumes:
   etcd_data:
   minio_data:

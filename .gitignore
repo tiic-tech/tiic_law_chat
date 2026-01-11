@@ -33,10 +33,12 @@ uv.lock
 *.safetensors
 *.h5
 *.onnx
+.local
 
 # Runtime cache
 cache/
 storage/**/cache/
+.ruff_cache
 
 # --------------------
 # Jupyter
