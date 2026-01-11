@@ -133,6 +133,7 @@ testpaths = ["playground"]
 addopts = "-q --strict-markers"
 asyncio_mode = "auto"
 markers = [
+  "schema_gate: schema gate tests",
   "ingest_gate: ingest gate tests",
   "retrieval_gate: retrieval gate tests",
   "generation_gate: generation gate tests",
