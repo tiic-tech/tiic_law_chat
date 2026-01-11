@@ -19,13 +19,13 @@ from uae_law_rag.backend.schemas.evaluator import (
     EvaluationResult,
     EvaluatorConfig,
 )
-from uae_law_rag.backend.schemas.generation import Citation, GenerationRecord
+from uae_law_rag.backend.schemas.generation import Citation, CitationsPayload, GenerationRecord
 from uae_law_rag.backend.schemas.ids import is_uuid_str, new_uuid
 from uae_law_rag.backend.schemas.retrieval import (
     RetrievalBundle,
     RetrievalHit,
     RetrievalRecord,
-    RetrievalTiming,
+    RetrievalTimingMs,
 )
 
 
@@ -58,21 +58,18 @@ def test_ids_is_uuid_str_rejects_non_uuid() -> None:
 
 def test_retrieval_timing_allows_extra() -> None:
     """RetrievalTiming is extra=allow so it can accept future breakdown fields."""  # docstring: 允许扩展
-    t = RetrievalTiming.model_validate({"total_ms": 1.0, "keyword_ms": 0.2, "custom_stage_ms": 0.3})
-    assert t.total_ms == 1.0
-    assert getattr(t, "custom_stage_ms") == 0.3
+    t = RetrievalTimingMs.model_validate({"total": 1.0, "keyword": 0.2, "custom_stage": 0.3})
+    assert t.total == 1.0
+    assert getattr(t, "custom_stage") == 0.3
 
 
 def test_retrieval_record_forbids_extra() -> None:
     """RetrievalRecord must be strict (extra=forbid)."""  # docstring: 锁死合同防漂移
-    record = RetrievalRecord(
-        id=new_uuid(),
-        message_id=new_uuid(),
-        kb_id=new_uuid(),
-        query_text="Q?",
-    )
-    assert record.keyword_top_k >= 1
-    assert record.fusion_strategy in ("union", "interleave", "weighted")
+    record = RetrievalRecord(id=new_uuid(), message_id=new_uuid(), kb_id=new_uuid(), query_text="Q?")
+    assert record.keyword_top_k == 200
+    assert record.vector_top_k == 50
+    assert record.fusion_top_k == 50
+    assert record.rerank_top_k == 10
 
     with pytest.raises(ValidationError):
         RetrievalRecord(
@@ -88,24 +85,25 @@ def test_retrieval_hit_forbids_extra_and_has_required_fields() -> None:
     """RetrievalHit must be strict and contain evidence pointers."""  # docstring: 命中条目最小合同
     hit = RetrievalHit(
         retrieval_record_id=new_uuid(),
-        rank=0,
-        stage="vector",
         node_id=new_uuid(),
-        vector_id=new_uuid(),
+        source="vector",
+        rank=0,
         score=0.9,
-        snippet="",
-        meta={"page": 1},
+        score_details={"vector_score": 0.9},
+        excerpt="",
+        page=1,
+        start_offset=0,
+        end_offset=10,
     )
-    assert hit.rank == 0
-    assert hit.stage in ("keyword", "vector", "fusion", "rerank")
-    assert "page" in hit.meta
+    assert hit.source in ("keyword", "vector", "fused", "reranked")
+    assert hit.score_details["vector_score"] == 0.9
 
     with pytest.raises(ValidationError):
         RetrievalHit(
             retrieval_record_id=new_uuid(),
-            rank=0,
-            stage="vector",
             node_id=new_uuid(),
+            source="vector",
+            rank=0,
             foo="bar",  # type: ignore[arg-type]
         )
 
@@ -121,7 +119,7 @@ def test_retrieval_bundle_contract() -> None:
     hit = RetrievalHit(
         retrieval_record_id=record.id,
         rank=0,
-        stage="keyword",
+        source="keyword",
         node_id=new_uuid(),
         score=1.0,
     )
@@ -161,10 +159,10 @@ def test_generation_record_forbids_extra() -> None:
         model_provider="ollama",
         model_name="llama3",
         output_raw="A",
-        citations=[Citation(node_id=new_uuid())],
+        citations=CitationsPayload(nodes=[new_uuid()], items=[{"node_id": new_uuid()}]),
     )
     assert gr.status in ("success", "failed", "partial")
-    assert len(gr.citations) == 1
+    assert len(gr.citations.nodes) == 1
 
     with pytest.raises(ValidationError):
         GenerationRecord(

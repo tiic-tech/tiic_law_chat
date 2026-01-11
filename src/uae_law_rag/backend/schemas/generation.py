@@ -35,6 +35,22 @@ class Citation(BaseModel):
     locator: Dict[str, Any] = Field(default_factory=dict)  # docstring: 定位信息（page/article_id/section_path 等）
 
 
+class CitationsPayload(BaseModel):
+    """
+    [职责] CitationsPayload：对齐 DB generation_record.citations 的落库形态（JSON dict）。
+    [边界] 不强制包含全文；nodes/items 只存引用指针与轻量定位信息。
+    [上游关系] generation pipeline 从 retrieval hits / node 快照构建 citations。
+    [下游关系] evaluator/UI 读取 citations 做覆盖率/高亮/证据链解释。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    version: str = Field(default="v1")  # docstring: 引用结构版本（便于迁移）
+    nodes: List[NodeId] = Field(default_factory=list)  # docstring: 被引用的 node_id 列表（兼容 MVP）
+    items: List[Dict[str, Any]] = Field(default_factory=list)  # docstring: 结构化引用条目（可选）
+    meta: Dict[str, Any] = Field(default_factory=dict)  # docstring: 扩展信息（可选）
+
+
 class GenerationRecord(BaseModel):
     """
     [职责] GenerationRecord：一次生成的可回放“输入快照 + 模型快照 + 输出快照 + 引用证据”。
@@ -54,15 +70,14 @@ class GenerationRecord(BaseModel):
 
     model_provider: str = Field(..., min_length=1, max_length=50)  # docstring: 模型提供方（ollama/openai/...）
     model_name: str = Field(..., min_length=1, max_length=200)  # docstring: 模型名称（例如 llama3 / gpt-4.1）
-    provider_snapshot: Dict[str, Any] = Field(
-        default_factory=dict
-    )  # docstring: provider 参数快照（temperature/top_p 等）
 
     messages_snapshot: Dict[str, Any] = Field(default_factory=dict)  # docstring: 输入消息快照（system/user/context 等）
-    output_raw: str = Field(default="")  # docstring: 模型原始输出文本
+
+    output_raw: str = Field(..., min_length=1)  # 对齐 DB nullable=False（避免空字符串成功）
     output_structured: Optional[Dict[str, Any]] = Field(default=None)  # docstring: 结构化输出（JSON dict），可选
 
-    citations: List[Citation] = Field(default_factory=list)  # docstring: 引用证据列表（可回查）
+    citations: CitationsPayload = Field(default_factory=CitationsPayload)  # 对齐 DB dict
+
     status: GenerationStatus = Field(default="success")  # docstring: 生成状态
     error_message: Optional[str] = Field(default=None)  # docstring: 失败原因（若 status != success）
 
