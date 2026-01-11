@@ -66,6 +66,10 @@ class IngestRepo:
         return kb
 
     # --- File ---
+    async def get_file(self, file_id: str) -> Optional[KnowledgeFileModel]:
+        """Fetch file by id."""  # docstring: ingest_gate/服务层常用读接口
+        return await self._session.get(KnowledgeFileModel, file_id)
+
     async def get_file_by_sha256(self, kb_id: str, sha256: str) -> Optional[KnowledgeFileModel]:
         """Find file in KB by content hash."""  # docstring: 幂等导入判定
         stmt = select(KnowledgeFileModel).where(
@@ -125,6 +129,10 @@ class IngestRepo:
         return True
 
     # --- Document & Nodes ---
+    async def get_document(self, document_id: str) -> Optional[DocumentModel]:
+        """Fetch document by id."""  # docstring: ingest_gate/服务层常用读接口
+        return await self._session.get(DocumentModel, document_id)
+
     async def create_document(
         self,
         *,
@@ -145,6 +153,18 @@ class IngestRepo:
         self._session.add(doc)
         await self._session.flush()
         return doc
+
+    async def list_nodes_by_document(self, document_id: str) -> List[NodeModel]:
+        """List nodes for a document ordered by node_index."""  # docstring: 回放/检索/调试需要稳定顺序
+        stmt = select(NodeModel).where(NodeModel.document_id == document_id).order_by(NodeModel.node_index.asc())
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return list(rows)
+
+    async def list_node_vector_maps_by_file(self, file_id: str) -> List[NodeVectorMapModel]:
+        """List node-vector maps for a file."""  # docstring: ingest 完成后核验映射数量与一致性
+        stmt = select(NodeVectorMapModel).where(NodeVectorMapModel.file_id == file_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return list(rows)
 
     async def bulk_create_nodes(self, *, document_id: str, nodes: Sequence[dict]) -> List[NodeModel]:
         """
