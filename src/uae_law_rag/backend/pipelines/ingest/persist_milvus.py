@@ -31,7 +31,6 @@ REQUIRED_FIELDS = [
     KB_ID_FIELD,
     FILE_ID_FIELD,
     DOCUMENT_ID_FIELD,
-    PAGE_FIELD,
     ARTICLE_ID_FIELD,
     SECTION_PATH_FIELD,
 ]  # docstring: Milvus payload 必填字段（与 kb/schema 对齐）
@@ -73,7 +72,7 @@ def _normalize_entity(entity: Dict[str, Any], *, embed_dim: Optional[int] = None
     article_id = str(entity.get(ARTICLE_ID_FIELD) or "")  # docstring: 法条编号（允许空）
     section_path = str(entity.get(SECTION_PATH_FIELD) or "")  # docstring: 结构路径（允许空）
 
-    return {
+    out = {
         VECTOR_ID_FIELD: vector_id,
         EMBEDDING_FIELD: vector,
         NODE_ID_FIELD: node_id,
@@ -84,6 +83,12 @@ def _normalize_entity(entity: Dict[str, Any], *, embed_dim: Optional[int] = None
         ARTICLE_ID_FIELD: article_id,
         SECTION_PATH_FIELD: section_path,
     }
+    # 透传额外字段（用于过滤/审计），但不得覆盖固定字段
+    for k, v in entity.items():
+        if k not in out:
+            out[k] = v
+
+    return out
 
 
 def _normalize_entities(entities: Sequence[Dict[str, Any]], *, embed_dim: Optional[int] = None) -> List[Dict[str, Any]]:
