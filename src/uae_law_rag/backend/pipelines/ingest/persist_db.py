@@ -25,14 +25,14 @@ def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, 
     """
     normalized: List[Dict[str, Any]] = []
     for i, n in enumerate(nodes):
-        text = str(n.get("text") or "").strip()  # docstring: 节点文本（keyword 召回基础）
-        if not text:
+        text_raw = str(n.get("text") or "")  # docstring: 节点文本（keyword 召回基础）
+        if not text_raw.strip():
             raise ValueError("node.text is required")  # docstring: 禁止空节点
         node_index = int(n.get("node_index", i))  # docstring: node_index 兜底
         normalized.append(
             {
                 "node_index": node_index,
-                "text": text,
+                "text": text_raw,
                 "page": n.get("page"),
                 "article_id": n.get("article_id"),
                 "section_path": n.get("section_path"),
@@ -55,8 +55,10 @@ def _validate_node_indices(nodes: Sequence[Dict[str, Any]]) -> None:
     """
     if not nodes:
         return
-    indices = sorted(int(n["node_index"]) for n in nodes)  # docstring: 收集并排序索引
-    expected = list(range(len(indices)))
+    indices = [int(n["node_index"]) for n in nodes]  # docstring: 保持原顺序校验
+    if len(set(indices)) != len(indices):
+        raise ValueError("node_index must be unique")  # docstring: 禁止重复
+    expected = list(range(len(indices)))  # docstring: 期望 0..N-1
     if indices != expected:
         raise ValueError("node_index must be continuous from 0")  # docstring: 保证稳定排序
 
