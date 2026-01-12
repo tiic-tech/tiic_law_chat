@@ -258,12 +258,35 @@ async def test_generation_gate_end_to_end(session: AsyncSession, monkeypatch: py
     cited_nodes = set(citations_payload.get("nodes") or [])  # docstring: 引用 nodes
     assert cited_nodes  # docstring: citations 数量 >= 1
     assert cited_nodes.issubset(hit_nodes)  # docstring: citations ⊆ hits
+    items = citations_payload.get("items") or []  # docstring: citations items
+    assert isinstance(items, list)  # docstring: items 应为 list
+    item_nodes = {str(i.get("node_id") or "") for i in items if isinstance(i, dict)}  # docstring: items.node_id
+    assert item_nodes  # docstring: items 至少一条
+    assert item_nodes.issubset(hit_nodes)  # docstring: items.node_id ⊆ hits
+    assert item_nodes == cited_nodes  # docstring: nodes 与 items.node_id 一致
 
     structured = rec.output_structured or {}  # docstring: 结构化输出
     assert isinstance(structured, dict)  # docstring: output_structured 应为 dict
     assert "answer" in structured  # docstring: answer 字段存在
+    assert "citations" in structured  # docstring: structured 应包含 citations
+    structured_citations = structured.get("citations") or []  # docstring: structured citations
+    assert isinstance(structured_citations, list)  # docstring: structured citations 应为 list
+    structured_nodes = {
+        str(c.get("node_id") or "") for c in structured_citations if isinstance(c, dict)
+    }  # docstring: structured citations node_id
+    assert structured_nodes.issubset(hit_nodes)  # docstring: structured citations ⊆ hits
 
     snapshot = rec.messages_snapshot or {}  # docstring: messages_snapshot
+    evidence = snapshot.get("evidence") or []  # docstring: prompt evidence 快照
+    assert isinstance(evidence, list)  # docstring: evidence 应为 list
+    assert evidence  # docstring: evidence 至少一条（与 hits 对齐）
+    evidence_nodes = {
+        str(e.get("node_id") or "") for e in evidence if isinstance(e, dict)
+    }  # docstring: evidence node_ids
+    assert evidence_nodes.issubset(hit_nodes)  # docstring: evidence.node_id ⊆ hits
+    valid_node_ids = snapshot.get("valid_node_ids") or []  # docstring: prompt valid_node_ids
+    if isinstance(valid_node_ids, list) and valid_node_ids:
+        assert set(map(str, valid_node_ids)).issubset(hit_nodes)  # docstring: valid_node_ids ⊆ hits
     timing_ms = snapshot.get("timing_ms") or {}  # docstring: timing 快照
     assert "llm" in timing_ms  # docstring: timing 包含 llm
     assert "postprocess" in timing_ms  # docstring: timing 包含 postprocess
