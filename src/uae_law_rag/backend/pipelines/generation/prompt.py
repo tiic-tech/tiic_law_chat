@@ -197,7 +197,8 @@ def _build_evidence_item(
 
     snapshot = _extract_snapshot(node_snapshots, node_id)  # docstring: 读取 node 快照
     raw_rank = _read_hit_field(hit, "rank")  # docstring: 尝试读取 hit.rank
-    rank_out = int(raw_rank) if raw_rank is not None else int(rank)  # docstring: rank 兜底
+    coerced_rank = _coerce_int(raw_rank)
+    rank_out = int(coerced_rank) if coerced_rank is not None else int(rank)  # docstring: rank 兜底
 
     page = _coerce_int(_read_hit_field(hit, "page") or snapshot.get("page"))  # docstring: 页码快照
     start_offset = _coerce_int(
@@ -297,11 +298,12 @@ def _format_evidence_block(items: Sequence[Mapping[str, Any]]) -> str:
         page = _format_locator_value(locator.get("page"))  # docstring: 格式化页码
         article_id = _format_locator_value(locator.get("article_id"))  # docstring: 格式化 article_id
         section_path = _format_locator_value(locator.get("section_path"))  # docstring: 格式化 section_path
+        source = _format_locator_value(locator.get("source"))  # docstring: 格式化 source
         offsets = _format_offsets(locator.get("start_offset"), locator.get("end_offset"))  # docstring: offset 文本
 
         header = (
             f"[{rank}] node_id={node_id} page={page} article_id={article_id} "
-            f"section_path={section_path} offsets={offsets}"
+            f"section_path={section_path} offsets={offsets} source={source}"
         )  # docstring: evidence 行头部
         lines.append(header)  # docstring: 写入 header
 
