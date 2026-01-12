@@ -75,9 +75,17 @@ def _extract_pages(parsed: Any) -> Optional[int]:
     """
     if isinstance(parsed, dict):
         v = parsed.get("pages")
-        return int(v) if isinstance(v, int) else None  # docstring: dict 页数
+        if isinstance(v, int):
+            return int(v)
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
+        return None  # docstring: dict 页数
     v = getattr(parsed, "pages", None)
-    return int(v) if isinstance(v, int) else None  # docstring: attr 页数
+    if isinstance(v, int):
+        return int(v)
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    return None  # docstring: attr 页数
 
 
 def _extract_article_id(text: str) -> Optional[str]:
@@ -337,9 +345,10 @@ def _build_payloads(
     cursor = 0
     for i, node in enumerate(_iter_nodes(nodes)):
         text_raw = _node_text(node)  # docstring: 提取节点文本
-        if not text_raw or not text_raw.strip():
+        text_stripped = text_raw.strip() if isinstance(text_raw, str) else str(text_raw).strip()
+        if not text_stripped:
             continue  # docstring: 跳过空节点
-        text = text_raw.strip()  # docstring: 统一去除首尾空白
+        text = text_raw  # docstring: 保持原文本以确保与 start/end_offset 映射一致
 
         start, end = _node_offsets(node)  # docstring: 读取 offset
         if start is None or end is None:
@@ -350,19 +359,21 @@ def _build_payloads(
 
         meta = _node_meta(node)  # docstring: 透传原始 metadata
         if not article_id:
-            article_id = _extract_article_id(text)  # docstring: 从文本补充 Article
+            article_id = _extract_article_id(text_stripped)  # docstring: 从文本补充 Article
         if not article_id and meta.get("article_id"):
             article_id = str(meta.get("article_id"))  # docstring: 从 metadata 补充 Article
         if not section_path and meta.get("section_path"):
             section_path = str(meta.get("section_path"))  # docstring: 从 metadata 补充 section
         element_type = str(meta.get("element_type") or meta.get("type") or element_type_fallback)
-        meta_out = {
-            "source": "markdown",
-            "element_type": element_type,
-            "node_kind": kind,
-            "segment_version": segment_version,
-        }  # docstring: 标准化节点元数据
-        meta_out.update(meta)  # docstring: 合并原始 metadata
+        meta_out = dict(meta)  # docstring: 先复制原始 metadata，避免丢失字段
+        meta_out.update(
+            {
+                "source": "markdown",
+                "element_type": element_type,
+                "node_kind": kind,
+                "segment_version": segment_version,
+            }
+        )  # docstring: 标准字段覆盖，保证合同稳定
 
         payloads.append(
             {
