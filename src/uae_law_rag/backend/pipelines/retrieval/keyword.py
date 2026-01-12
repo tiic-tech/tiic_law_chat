@@ -10,35 +10,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, List, Literal, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.db.fts import KeywordHit, search_nodes
-
+from uae_law_rag.backend.pipelines.retrieval.types import Candidate
 
 CandidateStage = Literal["keyword", "vector", "fusion", "rerank"]  # docstring: 检索阶段枚举
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """
-    [职责] Candidate：检索阶段统一候选结构（keyword/vector/fusion/rerank 共享）。
-    [边界] 只携带必要证据指针与可解释分数；不包含全文与 DB 事务信息。
-    [上游关系] keyword_recall/vector_recall 等阶段产出。
-    [下游关系] fusion/rerank 继续处理；persist 写入 RetrievalHitModel。
-    """
-
-    node_id: str
-    stage: CandidateStage
-    score: float
-    score_details: Dict[str, Any]
-    excerpt: Optional[str]
-    page: Optional[int]
-    start_offset: Optional[int]
-    end_offset: Optional[int]
-    meta: Dict[str, Any]
 
 
 def _normalize_query(query: str) -> str:
@@ -83,7 +62,9 @@ def _bm25_to_score(bm25: float) -> float:
     [上游关系] _hit_to_candidate 调用。
     [下游关系] Candidate.score 用于后续 fusion/rerank。
     """
-    raw = float(bm25 or 0.0)  # docstring: bm25 兜底为 float
+    if bm25 is None:
+        return 0.0  # docstring: 缺失分数不得被判定为强相关
+    raw = float(bm25)  # docstring: bm25 兜底为 float
     if raw <= 0:
         return 1.0  # docstring: 负值/零视为强相关
     return 1.0 / (1.0 + raw)  # docstring: 映射到 (0,1]
@@ -102,25 +83,34 @@ def _hit_to_candidate(
     [下游关系] 返回 Candidate 供 fusion/rerank/persist 使用。
     """
     meta = dict(hit.meta or {})  # docstring: 透传元信息（kb/doc/file/page/article）
-    raw_score = float(hit.score or 0.0)  # docstring: bm25 原始分数
+    raw_score = hit.score  # docstring: bm25 原始分数（可能为空）
     norm_score = _bm25_to_score(raw_score)  # docstring: 统一分数（越大越好）
     score_details = {
-        "bm25": raw_score,
+        "bm25": float(raw_score) if raw_score is not None else None,
         "bm25_norm": norm_score,
         "fts_query": fts_query,
         "keyword_mode": mode,
         "keyword_strategy": "fts5",
     }  # docstring: 可解释分数细节
     excerpt = str(hit.snippet or "") or None  # docstring: 命中片段（可空）
+
+    def _coerce_int(v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
     return Candidate(
         node_id=str(hit.node_id),  # docstring: 节点ID
         stage="keyword",  # docstring: 标记 keyword 阶段
         score=norm_score,  # docstring: 归一化分数
         score_details=score_details,  # docstring: 分数细节快照
         excerpt=excerpt,  # docstring: snippet 作为摘要
-        page=meta.get("page"),  # docstring: 页码快照
-        start_offset=meta.get("start_offset"),  # docstring: 起始偏移（可能为空）
-        end_offset=meta.get("end_offset"),  # docstring: 结束偏移（可能为空）
+        page=_coerce_int(meta.get("page")),  # docstring: 页码快照
+        start_offset=_coerce_int(meta.get("start_offset")),  # docstring: 起始偏移（可能为空）
+        end_offset=_coerce_int(meta.get("end_offset")),  # docstring: 结束偏移（可能为空）
         meta=meta,  # docstring: 透传 meta
     )
 
