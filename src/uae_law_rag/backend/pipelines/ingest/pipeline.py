@@ -16,10 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel
+from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel, NodeVectorMapModel
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
 
 from . import embed as embed_mod
@@ -90,12 +90,14 @@ async def run_ingest_pdf(
         existing = await ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)  # docstring: 幂等判定
     if existing is not None and existing.ingest_status == "success":
         document_id = await _get_document_id_by_file_id(session=session, file_id=existing.id)  # docstring: 回查文档
+        stmt = select(func.count(NodeVectorMapModel.id)).where(NodeVectorMapModel.file_id == existing.id)
+        vector_count = int((await session.execute(stmt)).scalar() or 0)
         return IngestResult(
             kb_id=kb_id,
             file_id=existing.id,
             document_id=document_id,
             node_count=int(existing.node_count or 0),
-            vector_count=int(existing.node_count or 0),
+            vector_count=vector_count,
             sha256=sha256,
             pages=existing.pages,
             sample_query_vector=None,
@@ -185,6 +187,9 @@ async def run_ingest_pdf(
                 meta_data={"parser": parser_name, "parse_version": parse_version},
             )  # docstring: 落库 Document + Nodes
 
+        # IMPORTANT: bulk insert 返回顺序不保证；按 node_index 对齐以确保 node↔embedding 映射稳定
+        nodes_out = sorted(list(nodes_out), key=lambda n: int(getattr(n, "node_index", 0)))
+
         for i, node in enumerate(nodes_out):
             payload = node_dicts[i]  # docstring: 通过索引对齐 payload
             page = payload.get("page")
@@ -256,7 +261,8 @@ async def run_ingest_pdf(
                     last_ingested_at=datetime.now(timezone.utc),
                 )  # docstring: 标记失败便于回滚与观测
         if entities and hasattr(milvus_repo, "delete_by_expr"):
-            expr = f"file_id == '{file_row.id if file_row else ''}'"  # docstring: 按 file_id 清理向量
+            fid = (file_row.id if file_row else "").replace("'", "\\'")
+            expr = f"file_id == '{fid}'"  # docstring: 按 file_id 清理向量
             await milvus_repo.delete_by_expr(collection=milvus_collection, expr=expr)  # docstring: best-effort 清理
         raise
 
