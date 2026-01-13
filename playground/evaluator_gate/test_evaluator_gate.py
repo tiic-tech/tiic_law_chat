@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # playground/evaluator_gate/test_evaluator_gate.py
 
 """
@@ -153,7 +152,12 @@ async def _create_eval_case(
                 "source": "fused",
                 "rank": 1,
                 "score": 0.9,
-                "score_details": {"mock_score": 0.9},
+                # docstring: 增强 - 注入 keyword/vector 信号，避免未来启用 require_* checks 时不稳定
+                "score_details": {
+                    "mock_score": 0.9,
+                    "keyword_score": 0.9,
+                    "vector_score": 0.9,
+                },
                 "excerpt": "Article 2: Scope of application for the regulation.",
                 "page": 1,
                 "start_offset": 0,
@@ -183,7 +187,12 @@ async def _create_eval_case(
             source="fused",
             rank=1,
             score=0.9,
-            score_details={"mock_score": 0.9},
+            # docstring: 增强 - 注入 keyword/vector 信号（与 DB hit 一致）
+            score_details={
+                "mock_score": 0.9,
+                "keyword_score": 0.9,
+                "vector_score": 0.9,
+            },
             excerpt="Article 2: Scope of application for the regulation.",
             page=1,
             start_offset=0,
@@ -207,7 +216,13 @@ async def _create_eval_case(
     }  # docstring: 输出 payload
     output_raw = json.dumps(raw_payload, ensure_ascii=True)  # docstring: output_raw JSON
 
-    citations_payload = {"nodes": citation_nodes, "items": citation_items}  # docstring: citations payload dict
+    # docstring: 增强 - 使用标准 citations payload 结构，提升 schema 演进兼容性
+    citations_payload = {
+        "version": "v1",
+        "nodes": citation_nodes,
+        "items": citation_items,
+        "meta": {},
+    }  # docstring: citations payload dict
     gen = await generation_repo.create_record(
         message_id=msg.id,
         retrieval_record_id=record.id,
@@ -264,8 +279,7 @@ def _assert_checks_payload(checks_payload: Dict[str, Any]) -> None:
     items = checks_payload.get("items") or []  # docstring: checks.items
     assert isinstance(items, list)  # docstring: items 必须是 list
     for item in items:
-        if not isinstance(item, dict):
-            continue  # docstring: 跳过非 dict 项
+        assert isinstance(item, dict)  # docstring: gate: checks.items 每项必须为 dict（避免落库异常被吞）
         assert str(item.get("name") or "").strip()  # docstring: name 非空
         assert item.get("status") in {"pass", "fail", "warn", "skipped"}  # docstring: status 合法
 
@@ -354,6 +368,21 @@ async def test_evaluator_gate_end_to_end(session: AsyncSession) -> None:
     db_coverage = (scores_payload.get("overall") or {}).get("citation_coverage")  # docstring: DB coverage
     assert db_coverage is not None
     assert 0.0 <= float(db_coverage) <= 1.0  # docstring: coverage 在区间内
+    assert float(db_coverage) == float(coverage)  # docstring: DB 与 result coverage 一致
+
+    # docstring: 增强 - 基础 meta/trace/timing 字段存在性（可回放审计最小合同）
+    meta_payload = record.meta or {}  # docstring: meta payload
+    assert isinstance(meta_payload, dict)  # docstring: meta 必须为 dict
+    assert str(meta_payload.get("trace_id") or "").strip()  # docstring: trace_id 必填
+    assert str(meta_payload.get("request_id") or "").strip()  # docstring: request_id 必填
+    timing_ms = meta_payload.get("timing_ms") or {}  # docstring: timing_ms
+    assert isinstance(timing_ms, dict)  # docstring: timing_ms 必须为 dict
+    assert "total" in timing_ms  # docstring: timing_ms.total 必须存在
+
+    # docstring: 增强 - checks 名称稳定性（至少锁定关键检查项存在）
+    check_names = {c.name for c in result.checks}  # docstring: checks 名称集合
+    assert "require_citations" in check_names  # docstring: require_citations 必须存在
+    assert "citation_coverage" in check_names  # docstring: citation_coverage 必须存在
 
 
 @pytest.mark.asyncio
@@ -423,3 +452,11 @@ async def test_evaluator_gate_require_citations_fail(session: AsyncSession) -> N
     checks_payload = record.checks or {}  # docstring: checks payload
     items = checks_payload.get("items") or []  # docstring: checks.items
     assert items  # docstring: checks 非空（非 skipped）
+    _assert_checks_payload(checks_payload)  # docstring: 校验 checks payload
+
+    # docstring: 增强 - fail case 仍需落库基本 meta/timing 字段
+    meta_payload = record.meta or {}  # docstring: meta payload
+    assert str(meta_payload.get("trace_id") or "").strip()  # docstring: trace_id 必填
+    timing_ms = meta_payload.get("timing_ms") or {}  # docstring: timing_ms
+    assert isinstance(timing_ms, dict)  # docstring: timing_ms 必须为 dict
+    assert "total" in timing_ms  # docstring: timing_ms.total 必须存在
