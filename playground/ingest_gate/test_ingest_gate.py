@@ -47,8 +47,13 @@ def _milvus_env() -> Dict[str, str]:
     [上游关系] gate test 调用。
     [下游关系] _should_skip 使用。
     """
+    uri = os.getenv("MILVUS_URI", "").strip()
+    url = os.getenv("MILVUS_URL", "").strip()  # docstring: 兼容 infra/compose 常用变量
+    if not uri and url:
+        uri = url  # docstring: 将 URL 视为 URI
+        os.environ["MILVUS_URI"] = uri  # docstring: 兼容 MilvusClient.from_env
     return {
-        "uri": os.getenv("MILVUS_URI", "").strip(),
+        "uri": uri,
         "host": os.getenv("MILVUS_HOST", "").strip(),
         "port": os.getenv("MILVUS_PORT", "").strip(),
     }
@@ -90,7 +95,9 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
     [下游关系] 保障 retrieval/generation 使用的证据一致性。
     """
     if _should_skip():
-        pytest.skip("Milvus env not configured. Set MILVUS_URI or MILVUS_HOST/MILVUS_PORT.")  # docstring: 环境不可用
+        pytest.skip(
+            "Milvus env not configured. Set MILVUS_URI/MILVUS_URL or MILVUS_HOST/MILVUS_PORT."
+        )  # docstring: 环境不可用
 
     pdf_file = _pdf_path()  # docstring: PDF fixture 路径
     if not pdf_file.exists():
@@ -115,7 +122,7 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
         chunking_config={"enable_sentence_window": True, "window_size": 2},
     )  # docstring: 创建 KB 配置
 
-    client = MilvusClient.from_env()  # docstring: Milvus 连接
+    client = MilvusClient.from_env(force_reconnect=True)  # docstring: Milvus 连接
     await client.healthcheck()  # docstring: Milvus 必须可用
     spec = build_collection_spec(
         name=collection_name,
@@ -225,4 +232,8 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
             await idx.release_collection(spec.name)  # docstring: 释放 collection 资源
         except Exception:
             pass
-        await client.drop_collection(spec.name)  # docstring: 清理测试 collection
+        try:
+            await client.drop_collection(spec.name)  # docstring: 清理测试 collection
+        except Exception:
+            pass
+        client.disconnect()  # docstring: 释放 Milvus alias

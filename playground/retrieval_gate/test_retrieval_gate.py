@@ -41,6 +41,10 @@ def _milvus_env() -> Dict[str, str]:
     [下游关系] _should_skip 判定。
     """
     uri = os.getenv("MILVUS_URI", "").strip()
+    url = os.getenv("MILVUS_URL", "").strip()  # docstring: 兼容 infra/compose 常用变量
+    if not uri and url:
+        uri = url  # docstring: 将 URL 视为 URI
+        os.environ["MILVUS_URI"] = uri  # docstring: 兼容 MilvusClient.from_env
     host = os.getenv("MILVUS_HOST", "").strip()
     port = os.getenv("MILVUS_PORT", "").strip()
     return {"uri": uri, "host": host, "port": port}
@@ -70,7 +74,9 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
     [下游关系] 为 generation/evaluator 提供可信 evidence 底座。
     """
     if _should_skip():
-        pytest.skip("Milvus env not configured. Set MILVUS_URI or MILVUS_HOST/MILVUS_PORT.")  # docstring: 环境缺失
+        pytest.skip(
+            "Milvus env not configured. Set MILVUS_URI/MILVUS_URL or MILVUS_HOST/MILVUS_PORT."
+        )  # docstring: 环境缺失
 
     await ensure_sqlite_fts(session)  # docstring: 确保 FTS 虚表与触发器
 
@@ -155,7 +161,7 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
         default_top_k=3,
     )  # docstring: 构建 Milvus collection 规范
 
-    client = MilvusClient.from_env()  # docstring: 初始化 Milvus client
+    client = MilvusClient.from_env(force_reconnect=True)  # docstring: 初始化 Milvus client
     try:
         await client.create_collection(spec, drop_if_exists=True)  # docstring: 创建 collection
         idx = MilvusIndexManager(client)
@@ -282,3 +288,4 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
             await client.drop_collection(spec.name)  # docstring: 清理 Milvus 资源
         except Exception:
             pass
+        client.disconnect()  # docstring: 释放 Milvus alias
