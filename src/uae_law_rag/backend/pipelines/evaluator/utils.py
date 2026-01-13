@@ -73,11 +73,16 @@ def _extract_node_id(item: Any) -> str:
     """
     if isinstance(item, Mapping):
         return _coerce_str(item.get("node_id") or item.get("id") or item.get("nodeId"))  # docstring: mapping node_id
+    if isinstance(item, (bytes, bytearray)):
+        try:
+            return _coerce_str(item.decode("utf-8", errors="ignore"))  # docstring: bytes -> str
+        except Exception:
+            return ""  # docstring: decode 失败回退空
     if hasattr(item, "node_id"):
         return _coerce_str(getattr(item, "node_id", ""))  # docstring: attribute node_id
     if isinstance(item, str):
         return _coerce_str(item)  # docstring: 字符串视为 node_id
-    return ""  # docstring: 不支持类型回退空
+    return _coerce_str(item)  # docstring: 兜底转字符串（兼容 UUID/NodeId 等）
 
 
 def _build_id_set(values: Iterable[str]) -> set[str]:
