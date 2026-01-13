@@ -100,7 +100,7 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
     return {}  # docstring: 无法转换回退空 dict
 
 
-def _normalize_config(raw: Any) -> EvaluatorConfig:
+def _normalize_evaluator_config(raw: Any) -> EvaluatorConfig:
     """
     [职责] 将 raw 配置归一化为 EvaluatorConfig。
     [边界] 配置异常回退默认；不做策略校验。
@@ -398,7 +398,7 @@ async def run_evaluator_pipeline(
     generation_output = _build_generation_output(input)  # docstring: generation_output
     answer = _extract_generation_answer(input)  # docstring: answer 文本
 
-    cfg = _normalize_config(input.get("config"))  # docstring: 归一化配置
+    cfg = _normalize_evaluator_config(input.get("config"))  # docstring: 归一化配置
 
     ctx = ctx or PipelineContext.from_session(session)  # docstring: 统一 ctx 装配
     ctx.timing.reset()  # docstring: 清理上次 timing
