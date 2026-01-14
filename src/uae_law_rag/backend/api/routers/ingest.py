@@ -146,9 +146,13 @@ async def ingest(
     if isinstance(debug_payload, dict):
         document_id = debug_payload.get("document_id")  # docstring: 提取 document_id
 
+    file_id_raw = str(result.get("file_id") or "").strip()
+    if not file_id_raw:
+        raise RuntimeError("ingest_service returned empty file_id")  # docstring: 锁定对外合同，避免 silent bad response
+
     return IngestResponse(
         kb_id=KnowledgeBaseId(str(result.get("kb_id") or request.kb_id)),
-        file_id=KnowledgeFileId(str(result.get("file_id") or "")),
+        file_id=KnowledgeFileId(file_id_raw),
         file_name=str(request.file_name),
         document_id=DocumentId(str(document_id)) if document_id else None,
         status=_coerce_ingest_status(result.get("status")),  # docstring: 规范 status

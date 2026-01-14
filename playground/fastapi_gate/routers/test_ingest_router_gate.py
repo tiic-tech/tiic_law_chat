@@ -23,10 +23,10 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))  # docstring: ensure local src import
 
-from uae_law_rag.backend.api.deps import get_milvus_repo, get_session, get_trace_context
+from uae_law_rag.backend.api.deps import get_milvus_repo, get_session
+from uae_law_rag.backend.api.middleware import TraceContextMiddleware
 from uae_law_rag.backend.api.routers.ingest import router as ingest_router
-from uae_law_rag.backend.schemas.audit import TraceContext
-from uae_law_rag.backend.schemas.ids import UUIDStr, new_uuid
+from uae_law_rag.backend.schemas.ids import new_uuid
 from uae_law_rag.backend.utils.constants import REQUEST_ID_KEY, TIMING_MS_KEY, TRACE_ID_KEY
 
 
@@ -54,14 +54,6 @@ async def test_ingest_router_gate(session: AsyncSession, monkeypatch: pytest.Mon
     def _override_milvus_repo() -> _MilvusStub:
         return _MilvusStub()  # docstring: stub Milvus repo
 
-    def _override_trace_context() -> TraceContext:
-        return TraceContext(
-            trace_id=UUIDStr(trace_id),
-            request_id=UUIDStr(request_id),
-            parent_request_id=None,
-            tags={},
-        )  # docstring: fixed trace context
-
     async def _fake_ingest_file(**_kwargs):
         return {
             "kb_id": str(new_uuid()),
@@ -79,10 +71,10 @@ async def test_ingest_router_gate(session: AsyncSession, monkeypatch: pytest.Mon
     )  # docstring: patch service call
 
     app = FastAPI()
+    app.add_middleware(TraceContextMiddleware)  # docstring: inject trace/request headers
     app.include_router(ingest_router)  # docstring: mount ingest router
     app.dependency_overrides[get_session] = _override_session  # docstring: override session dep
     app.dependency_overrides[get_milvus_repo] = _override_milvus_repo  # docstring: override Milvus dep
-    app.dependency_overrides[get_trace_context] = _override_trace_context  # docstring: override trace dep
 
     payload = {
         "kb_id": str(new_uuid()),
@@ -92,8 +84,12 @@ async def test_ingest_router_gate(session: AsyncSession, monkeypatch: pytest.Mon
     }
 
     transport = ASGITransport(app=app)  # docstring: ASGI transport for httpx
+    headers = {
+        "x-trace-id": str(trace_id),
+        "x-request-id": str(request_id),
+    }  # docstring: explicit trace/request headers
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/ingest", json=payload)  # docstring: invoke ingest endpoint
+        resp = await client.post("/ingest", json=payload, headers=headers)  # docstring: invoke ingest endpoint
 
     assert resp.status_code == 200
     data = resp.json()
@@ -102,3 +98,7 @@ async def test_ingest_router_gate(session: AsyncSession, monkeypatch: pytest.Mon
     assert data["file_name"] == "test.pdf"
     assert data["node_count"] == 3
     assert "timing_ms" in data
+    assert "x-trace-id" in resp.headers  # docstring: header must include trace_id
+    assert "x-request-id" in resp.headers  # docstring: header must include request_id
+    assert resp.headers["x-trace-id"] == str(trace_id)  # docstring: trace_id must propagate
+    assert resp.headers["x-request-id"] == str(request_id)  # docstring: request_id must propagate
