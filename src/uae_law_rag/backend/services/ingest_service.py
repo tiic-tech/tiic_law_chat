@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -192,7 +193,7 @@ def _build_ingest_response(
     file_id: str,
     status: str,
     node_count: int,
-    timing_ms: Dict[str, float],
+    timing_ms: Dict[str, Any],
     trace_id: str,
     request_id: str,
     debug_payload: Optional[Dict[str, Any]] = None,
@@ -285,11 +286,12 @@ async def ingest_file(
     ingest_profile: Optional[Dict[str, Any]] = None,
     milvus_repo: Any,
     trace_context: Optional[TraceContext] = None,
+    dry_run: bool = False,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """
     [职责] ingest_file：执行文件导入（两阶段提交 + pipeline 编排 + gate 裁决）。
-    [边界] 不负责 HTTP 处理；不负责 Milvus collection 创建；不负责重试调度。
+    [边界] 不负责 HTTP 处理；不负责 Milvus collection 创建；不负责重试调度；dry_run=True 仅做解析/切分/embedding 校验，不落库、不写 Milvus。
     [上游关系] routers/ingest.py 调用；trace_context 来自 middleware/deps。
     [下游关系] ingest pipeline 写入 DB/Milvus；返回可映射的 ingest 响应。
     """
@@ -325,7 +327,11 @@ async def ingest_file(
     with ctx.timing.stage("idempotency"):
         existing = await ctx.ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)  # docstring: 幂等判定
     # docstring: 仅对 success 做短路；failed/pending 允许继续重试以实现可回放与自愈
-    if existing is not None and str(getattr(existing, "ingest_status", "") or "").lower() == INGEST_STATUS_SUCCESS:
+    if (
+        not dry_run
+        and existing is not None
+        and str(getattr(existing, "ingest_status", "") or "").lower() == INGEST_STATUS_SUCCESS
+    ):
         timing_ms = ctx.timing_ms(total_key=TIMING_TOTAL_MS_KEY)  # docstring: 幂等分支 timing
         debug_payload = (
             _build_debug_payload(
@@ -371,6 +377,125 @@ async def ingest_file(
 
     state = STATE_PENDING  # docstring: 显式状态机起点
     file_id = ""
+
+    if dry_run:
+        file_id = _dry_run_file_id(kb_id=kb_id, sha256=sha256)  # docstring: dry_run 稳定 file_id
+        current_stage: Optional[str] = None
+        node_dicts: List[Dict[str, Any]] = []
+        embeddings: List[Any] = []
+        parsed_pages: Optional[int] = None
+
+        try:
+            state = _advance_state(state, STATE_PARSING)  # docstring: dry_run 进入解析
+            current_stage = "parse"
+            ctx.with_provider(
+                "parser", {"name": profile["parser"], "parse_version": profile["parse_version"]}
+            )  # docstring: parser 快照
+            with ctx.timing.stage("parse"):
+                parsed = await pdf_parse_mod.parse_pdf(
+                    pdf_path=str(pdf_path),
+                    parser_name=profile["parser"],
+                    parse_version=profile["parse_version"],
+                )  # docstring: PDF -> Markdown（dry_run）
+
+            parsed_pages = _infer_pages(parsed)  # docstring: 解析页数（dry_run）
+
+            state = _advance_state(state, STATE_SEGMENTING)  # docstring: dry_run 进入切分
+            current_stage = "segment"
+            ctx.meta["segment_version"] = profile["segment_version"]  # docstring: 记录切分版本
+            with ctx.timing.stage("segment"):
+                node_dicts = await segment_mod.segment_nodes(
+                    parsed=parsed,
+                    chunking_config=getattr(kb, "chunking_config", {}) or {},
+                    segment_version=profile["segment_version"],
+                )  # docstring: Markdown -> Node payloads（dry_run）
+            if not node_dicts:
+                raise ValueError("segment produced no nodes")  # docstring: 禁止空节点集合
+
+            state = _advance_state(state, STATE_EMBEDDING)  # docstring: dry_run 进入 embedding
+            current_stage = "embed"
+            embed_provider = getattr(kb, "embed_provider", "ollama")
+            embed_model = getattr(kb, "embed_model", "")
+            embed_dim = getattr(kb, "embed_dim", None)
+            ctx.with_provider(
+                "embed",
+                {"provider": embed_provider, "model": embed_model, "dim": embed_dim},
+            )  # docstring: embedding 快照
+            with ctx.timing.stage("embed"):
+                embeddings = await embed_mod.embed_texts(
+                    texts=[n.get("text") or "" for n in node_dicts],
+                    provider=embed_provider,
+                    model=embed_model,
+                    dim=embed_dim,
+                )  # docstring: 生成 embedding（dry_run）
+            if len(embeddings) != len(node_dicts):
+                raise ValueError("embedding count mismatch")  # docstring: 向量数量必须与节点一致
+
+            gate = _evaluate_ingest_gate(
+                pages=parsed_pages,
+                node_count=len(node_dicts),
+                vector_count=len(embeddings),
+            )  # docstring: dry_run gate 裁决
+
+            if gate.passed:
+                state = _advance_state(state, STATE_PERSISTING)  # docstring: dry_run 虚拟持久化阶段
+                state = _advance_state(state, STATE_SUCCESS)  # docstring: dry_run 成功
+            else:
+                state = _advance_state(state, STATE_FAILED)  # docstring: dry_run 失败
+
+            timing_ms = ctx.timing_ms(total_key=TIMING_TOTAL_MS_KEY)  # docstring: dry_run timing
+            timing_ms["dry_run"] = True  # docstring: dry_run 标记（避免误读为落库）
+            debug_payload = (
+                _build_debug_payload(
+                    state=state,
+                    sha256=sha256,
+                    document_id=None,
+                    node_ids=[],
+                    vector_ids=[],
+                    gate=gate,
+                )
+                if debug
+                else None
+            )
+            if debug_payload is not None:
+                debug_payload["dry_run"] = True  # docstring: debug 标注 dry_run
+                debug_payload["node_ids_count"] = len(node_dicts)  # docstring: dry_run 节点数量
+                debug_payload["vector_ids_count"] = len(embeddings)  # docstring: dry_run 向量数量
+
+            log_event(
+                logger,
+                logging.INFO,
+                "ingest.dry_run",
+                context=ctx,
+                fields={
+                    "kb_id": kb_id,
+                    "file_id": file_id,
+                    "node_count": len(node_dicts),
+                    "status": INGEST_STATUS_SUCCESS if gate.passed else INGEST_STATUS_FAILED,
+                },
+            )  # docstring: dry_run 日志
+
+            return _build_ingest_response(
+                kb_id=kb_id,
+                file_id=file_id,
+                status=INGEST_STATUS_SUCCESS if gate.passed else INGEST_STATUS_FAILED,
+                node_count=len(node_dicts) if gate.passed else 0,
+                timing_ms=timing_ms,
+                trace_id=str(ctx.trace_id),
+                request_id=str(ctx.request_id),
+                debug_payload=debug_payload,
+            )
+        except Exception as exc:
+            error = _classify_pipeline_error(exc, stage=current_stage)  # docstring: dry_run 异常归类
+            log_event(
+                logger,
+                logging.ERROR,
+                "ingest.dry_run_failed",
+                context=ctx,
+                fields={"kb_id": kb_id, "file_id": file_id, "stage": current_stage},
+                exc_info=exc,
+            )  # docstring: dry_run 失败日志
+            raise error
 
     try:
         with ctx.timing.stage("db", accumulate=True):
@@ -733,6 +858,17 @@ def _new_vector_id(*, kb_id: str, node_id: str) -> str:
     """
     raw = f"{kb_id}:{node_id}".encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:36]
+
+
+def _dry_run_file_id(*, kb_id: str, sha256: str) -> str:
+    """
+    [职责] 生成 dry_run 稳定 file_id（避免与真实落库 ID 冲突）。
+    [边界] 仅用于 dry_run；不写入 DB。
+    [上游关系] ingest_file(dry_run=True) 调用。
+    [下游关系] 返回给上游用于审计与 UI 展示。
+    """
+    # docstring: 使用 namespace + 指纹生成可复现 UUID
+    return str(uuid5(NAMESPACE_URL, f"dryrun:{kb_id}:{sha256}"))
 
 
 def _infer_pages(parsed: Any) -> Optional[int]:
