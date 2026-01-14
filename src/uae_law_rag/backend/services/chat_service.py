@@ -38,7 +38,6 @@ from uae_law_rag.backend.utils.constants import (
     DEFAULT_PROMPT_NAME,
     DEFAULT_PROMPT_VERSION,
     DEBUG_KEY,
-    PROVIDER_SNAPSHOT_KEY,
     REQUEST_ID_KEY,
     TIMING_MS_KEY,
     TIMING_TOTAL_MS_KEY,
@@ -676,8 +675,12 @@ def _evaluate_evaluator_gate(result: EvaluationResult) -> EvaluatorGateDecision:
     for check in list(result.checks or []):
         check_status = str(getattr(check, "status", "") or "")
         if check_status in {"fail", "warn"}:
-            message = str(getattr(check, "message", "") or getattr(check, "name", "") or "")  # docstring: 原因文本
-            reasons.append(message or str(getattr(check, "name", "") or "check_failed"))  # docstring: 兜底原因
+            # NOTE: EvaluatorCheck MVP contract uses `reason` as the primary human-readable field.
+            # Keep backward-compat with `message` if legacy objects exist.
+            reason_text = str(
+                getattr(check, "reason", "") or getattr(check, "message", "") or getattr(check, "name", "") or ""
+            ).strip()
+            reasons.append(reason_text or "check_failed")  # docstring: 兜底原因
     return EvaluatorGateDecision(status=status, reasons=tuple([r for r in reasons if r]))
 
 
@@ -776,8 +779,11 @@ def _build_evaluator_summary(
     warnings = []
     for check in list(evaluator.checks or []):
         if str(getattr(check, "status", "")) in {"warn", "fail"}:
-            msg = str(getattr(check, "message", "") or getattr(check, "name", "") or "")
-            warnings.append(msg)  # docstring: 收集 warn/fail 消息
+            msg = str(
+                getattr(check, "reason", "") or getattr(check, "message", "") or getattr(check, "name", "") or ""
+            ).strip()
+            if msg:
+                warnings.append(msg)  # docstring: 收集 warn/fail 消息
     return {
         "status": str(evaluator.status),
         "rule_version": str(evaluator.config.rule_version),
@@ -820,7 +826,8 @@ def _classify_error(exc: Exception, *, stage: Optional[str]) -> DomainError:
     if isinstance(exc, DomainError):
         return exc  # docstring: 领域错误直接透传
     detail = {"stage": stage or "", "error_type": exc.__class__.__name__, "error": str(exc)}
-    if stage in {"embed", "vector", "milvus"}:
+    # generation / evaluator can also be external if they call LLMs or remote services
+    if stage in {"embed", "vector", "milvus", "generation", "llm"}:
         return ExternalDependencyError(message="external dependency failed", detail=detail, cause=exc)
     return PipelineError(message="chat pipeline failed", detail=detail, cause=exc)
 
@@ -993,9 +1000,10 @@ async def chat(
         vector_top_k=vector_top_k_record,
         keyword_top_k=keyword_top_k,
     )  # docstring: 构造 retrieval 配置
-    # 明确记录“是否启用向量”的服务层裁决，同时保持 record/schema 合同（vector_top_k>=1）。
-    retrieval_config["vector_enabled"] = bool(allow_vector)  # docstring: 审计字段（pipeline 可忽略）
-    retrieval_config["vector_top_k_requested"] = int(vector_top_k_requested)  # docstring: 审计字段（pipeline 可忽略）
+    # IMPORTANT: Do NOT inject extra keys into retrieval_config unless the retrieval pipeline schema
+    # explicitly allows them (many schema use extra="forbid").
+    # Keep the "vector enabled" semantics in the service layer: allow_vector controls whether we embed
+    # and whether we pass query_vector.
     if allow_vector and (not embed_decision.provider or not embed_decision.model):
         raise BadRequestError(
             message="embed_provider/embed_model is required"
@@ -1017,6 +1025,19 @@ async def chat(
         raise BadRequestError(
             message=f"model_provider not allowed: {llm_decision.provider}"
         )  # docstring: provider 不在 allowlist
+
+    # Ensure LLM provider snapshot is written BEFORE generation, so generation pipeline can persist it.
+    ctx.with_provider(
+        "llm",
+        {
+            "provider": llm_decision.provider,
+            "model": llm_decision.model,
+            "source": llm_decision.source,
+            "entitled": llm_decision.entitled,
+            "entitlement_reason": llm_decision.entitlement_reason,
+            "mode": _resolve_provider_mode(llm_decision.provider),
+        },
+    )  # docstring: LLM provider_snapshot 写入 ctx（generation 前）
 
     generation_config = _build_generation_config(
         context=context_dict,
@@ -1161,22 +1182,9 @@ async def chat(
         )  # docstring: 执行 generation pipeline
 
         generation_record_id = str(generation_bundle.record.id)  # docstring: generation_record_id
-        generation_timing_ms = dict(
-            generation_bundle.record.messages_snapshot.get(TIMING_MS_KEY, {}) or {}
-        )  # docstring: generation timing_ms
-        generation_provider_snapshot = dict(
-            generation_bundle.record.messages_snapshot.get(PROVIDER_SNAPSHOT_KEY, {}) or {}
-        )  # docstring: generation provider_snapshot
-        llm_snapshot = dict(ctx.provider_snapshot.get("llm", {}) or {})  # docstring: 读取 llm snapshot
-        llm_snapshot.update(
-            {
-                "source": llm_decision.source,
-                "entitled": llm_decision.entitled,
-                "entitlement_reason": llm_decision.entitlement_reason,
-                "mode": _resolve_provider_mode(llm_decision.provider),
-            }
-        )  # docstring: 补充 LLM entitlement/mode
-        ctx.with_provider("llm", llm_snapshot)  # docstring: 回写 provider_snapshot
+        # Prefer record-native fields for audit. Avoid reading from messages_snapshot.
+        generation_timing_ms = dict(getattr(generation_bundle.record, "timing_ms", {}) or {})  # type: ignore[assignment]
+        generation_provider_snapshot = dict(getattr(generation_bundle.record, "provider_snapshot", {}) or {})  # type: ignore[assignment]
         generation_gate = _evaluate_generation_gate(generation_bundle)  # docstring: generation gate 记录
         await session.commit()  # docstring: 提交 generation 结果（可回放）
 
