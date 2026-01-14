@@ -13,7 +13,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._common import DebugEnvelope, KnowledgeBaseId, KnowledgeFileId
+from ._common import DebugEnvelope, KnowledgeBaseId, KnowledgeFileId, DocumentId
 
 
 IngestStatus = Literal["pending", "success", "failed"]  # docstring: 导入状态（对外合同）
@@ -46,7 +46,7 @@ class IngestRequest(BaseModel):
 
     kb_id: KnowledgeBaseId = Field(...)  # docstring: 知识库ID
     file_name: str = Field(..., min_length=1, max_length=512)  # docstring: 文件名（展示/审计）
-    source_uri: str = Field(..., min_length=1, max_length=2048)  # docstring: 文件 URI（file:// 或本地路径）
+    source_uri: str = Field(..., min_length=1, max_length=2048)  # docstring: 文件 URI 或 路径
 
     ingest_profile: Optional[IngestProfile] = Field(default=None)  # docstring: 可选策略覆盖
     dry_run: bool = Field(default=False)  # docstring: 仅校验/不落库（保留字段）
@@ -77,7 +77,9 @@ class IngestResponse(BaseModel):
 
     kb_id: KnowledgeBaseId = Field(...)  # docstring: 知识库ID
     file_id: KnowledgeFileId = Field(...)  # docstring: 导入文件ID
-    ingest_status: IngestStatus = Field(...)  # docstring: 导入状态
+    file_name: str = Field(..., min_length=1, max_length=512)  # docstring: 文件名（展示/审计）
+    document_id: Optional[DocumentId] = Field(default=None)  # docstring: 导入产生的文档ID（可选）
+    status: IngestStatus = Field(...)  # docstring: 导入状态
     node_count: int = Field(..., ge=0)  # docstring: 节点数量
 
     timing_ms: IngestTimingMs = Field(default_factory=IngestTimingMs)  # docstring: 耗时统计
