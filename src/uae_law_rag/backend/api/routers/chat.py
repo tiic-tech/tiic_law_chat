@@ -112,10 +112,11 @@ def _build_debug_envelope(
     request_id: str,
     timing_ms: Dict[str, Any],
     debug_payload: Dict[str, Any],
+    include_gate: bool = True,
 ) -> ChatDebugEnvelope:
     """
     [职责] 组装 ChatDebugEnvelope（records/gate/扩展字段）。
-    [边界] 仅做字段映射；不校验 payload 语义。
+    [边界] 仅做字段映射；可通过 include_gate 控制 gate 输出。
     [上游关系] chat router 调用。
     [下游关系] ChatResponse.debug 输出结构。
     """
@@ -132,9 +133,10 @@ def _build_debug_envelope(
         "timing_ms": dict(timing_ms),
     }  # docstring: DebugEnvelope 基础字段
 
-    gate_payload = debug_payload.get("gate")
-    if isinstance(gate_payload, dict):
-        envelope["gate"] = ChatGateSummary.model_validate(gate_payload)  # docstring: 规范 gate 摘要
+    if include_gate:
+        gate_payload = debug_payload.get("gate")
+        if isinstance(gate_payload, dict):
+            envelope["gate"] = ChatGateSummary.model_validate(gate_payload)  # docstring: 规范 gate 摘要
 
     for key, value in debug_payload.items():
         if key in {"trace_id", "request_id", "records", "timing_ms", "gate"}:
@@ -163,6 +165,7 @@ async def chat_endpoint(
     """
     debug_enabled = bool(debug) or bool(request.debug)  # docstring: debug 开关（query/body 二选一）
     context_payload = request.context.model_dump() if request.context is not None else None  # docstring: 归一化 context
+    return_records = bool((context_payload or {}).get("return_records"))  # docstring: return_records 开关
     user_id = _resolve_user_id(http_request, trace_context)  # docstring: user_id 解析
 
     try:
@@ -189,14 +192,18 @@ async def chat_endpoint(
     request_id = str(result.get(REQUEST_ID_KEY) or trace_context.request_id)
     timing_ms = dict(result.get(TIMING_MS_KEY) or {})  # docstring: 读取 timing_ms
 
-    debug_payload = result.get(DEBUG_KEY) if debug_enabled else None  # docstring: 读取 debug payload
+    debug_payload = (
+        result.get(DEBUG_KEY) if (debug_enabled or return_records) else None
+    )  # docstring: 读取 debug payload
     debug_envelope: Optional[ChatDebugEnvelope] = None
     if isinstance(debug_payload, dict):
+        debug_timing_ms = timing_ms if debug_enabled else {}  # docstring: return_records 不输出 timing_ms 细节
         debug_envelope = _build_debug_envelope(
             trace_id=trace_id,
             request_id=request_id,
-            timing_ms=timing_ms,
+            timing_ms=debug_timing_ms,
             debug_payload=debug_payload,
+            include_gate=bool(debug_enabled),
         )  # docstring: 组装 ChatDebugEnvelope
 
     conversation_id_raw = str(result.get("conversation_id") or "").strip()

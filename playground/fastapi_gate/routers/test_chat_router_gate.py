@@ -137,3 +137,73 @@ async def test_chat_router_gate(session: AsyncSession, monkeypatch: pytest.Monke
     assert "x-request-id" in resp.headers  # docstring: header must include request_id
     assert resp.headers["x-trace-id"] == str(trace_id)  # docstring: trace_id must propagate
     assert resp.headers["x-request-id"] == str(request_id)  # docstring: request_id must propagate
+
+
+@pytest.mark.asyncio
+async def test_chat_router_return_records_gate(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    [职责] 验证 return_records 模式下仍返回 debug.records。
+    [边界] 不启用 debug；仅验证 record_id 透传与 gate 屏蔽。
+    [上游关系] /chat router。
+    [下游关系] 前端回放依赖 records-only debug。
+    """
+    trace_id = new_uuid()
+    request_id = new_uuid()
+
+    async def _override_session() -> AsyncIterator[AsyncSession]:
+        yield session  # docstring: reuse test session
+
+    async def _fake_chat(**_kwargs):
+        return {
+            "conversation_id": str(new_uuid()),
+            "message_id": str(new_uuid()),
+            "kb_id": str(new_uuid()),
+            "status": "success",
+            "answer": "ok",
+            "citations": [],
+            "evaluator": {"status": "pass", "rule_version": "v0", "warnings": []},
+            TIMING_MS_KEY: {"total_ms": 5.0},
+            TRACE_ID_KEY: str(trace_id),
+            REQUEST_ID_KEY: str(request_id),
+            DEBUG_KEY: {
+                RETRIEVAL_RECORD_ID_KEY: str(new_uuid()),
+                GENERATION_RECORD_ID_KEY: str(new_uuid()),
+                EVALUATION_RECORD_ID_KEY: str(new_uuid()),
+                "gate": {"retrieval": {"passed": True}},
+            },
+        }  # docstring: stub return_records payload
+
+    monkeypatch.setattr(
+        "uae_law_rag.backend.api.routers.chat.chat",
+        _fake_chat,
+    )  # docstring: patch service call
+
+    app = FastAPI()
+    app.add_middleware(TraceContextMiddleware)  # docstring: inject trace/request headers
+    app.include_router(chat_router)  # docstring: mount chat router
+    app.dependency_overrides[get_session] = _override_session  # docstring: override session dep
+
+    payload = {
+        "query": "hello",
+        "context": {"return_records": True},
+        "debug": False,
+    }
+
+    transport = ASGITransport(app=app)  # docstring: ASGI transport for httpx
+    headers = {
+        "x-trace-id": str(trace_id),
+        "x-request-id": str(request_id),
+    }  # docstring: explicit trace/request headers
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/chat", json=payload, headers=headers)  # docstring: invoke chat endpoint
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("debug")  # docstring: return_records 必须返回 debug
+    assert data["debug"]["records"][RETRIEVAL_RECORD_ID_KEY]  # docstring: retrieval_record_id 必须存在
+    assert not data["debug"].get("gate")  # docstring: return_records 模式不输出 gate
+    assert resp.headers["x-trace-id"] == str(trace_id)  # docstring: trace_id must propagate
+    assert resp.headers["x-request-id"] == str(request_id)  # docstring: request_id must propagate

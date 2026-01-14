@@ -544,6 +544,31 @@ def _build_debug_payload(
     }  # docstring: debug 字段集合
 
 
+def _build_records_payload(
+    *,
+    retrieval_record_id: Optional[str],
+    generation_record_id: Optional[str],
+    evaluation_record_id: Optional[str],
+    hits_count: Optional[int],
+) -> Dict[str, Any]:
+    """
+    [职责] 构造仅包含 record_id 的 payload（供 return_records 模式使用）。
+    [边界] 不包含 gate/provider_snapshot/timing_ms；仅输出最小审计锚点。
+    [上游关系] chat(...) 在 return_records 且非 debug 时调用。
+    [下游关系] router/chat.py 映射为 DebugEnvelope.records。
+    """
+    payload: Dict[str, Any] = {}  # docstring: records-only 容器
+    if retrieval_record_id:
+        payload["retrieval_record_id"] = retrieval_record_id  # docstring: retrieval 记录ID
+    if generation_record_id:
+        payload["generation_record_id"] = generation_record_id  # docstring: generation 记录ID
+    if evaluation_record_id:
+        payload["evaluation_record_id"] = evaluation_record_id  # docstring: evaluation 记录ID
+    if hits_count is not None:
+        payload["hits_count"] = int(hits_count)  # docstring: 命中数量（可选）
+    return payload  # docstring: 返回 records-only payload
+
+
 def _merge_provider_snapshot(*snapshots: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """
     [职责] 合并 provider_snapshot（后者覆盖同名 key）。
@@ -626,6 +651,7 @@ async def chat(
     # docstring: === preload & decisions ===
     ctx = PipelineContext.from_session(session, trace_context=trace_context)  # docstring: 装配 ctx
     context_dict = _normalize_context(context)  # docstring: context 归一化
+    return_records = bool(context_dict.get("return_records"))  # docstring: return_records 开关
 
     log_event(
         logger,
@@ -877,21 +903,27 @@ async def chat(
             )  # docstring: evaluator 摘要（blocked）
             total_ms = (time.perf_counter() - start_ts) * 1000.0  # docstring: 总耗时
             timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 总耗时快照
-            debug_payload = (
-                _build_debug_payload(
-                    retrieval_record_id=retrieval_record_id,
-                    generation_record_id=None,
-                    evaluation_record_id=None,
-                    retrieval_gate=retrieval_gate,
-                    generation_gate=None,
-                    evaluator_gate=None,
-                    provider_snapshot=_merge_provider_snapshot(retrieval_provider_snapshot, ctx.provider_snapshot),
-                    timing_ms={"retrieval": retrieval_timing_ms},
-                    hits_count=hits_count,
-                )
-                if debug
-                else None
-            )
+            debug_payload = None
+            if debug or return_records:
+                if debug:
+                    debug_payload = _build_debug_payload(
+                        retrieval_record_id=retrieval_record_id,
+                        generation_record_id=None,
+                        evaluation_record_id=None,
+                        retrieval_gate=retrieval_gate,
+                        generation_gate=None,
+                        evaluator_gate=None,
+                        provider_snapshot=_merge_provider_snapshot(retrieval_provider_snapshot, ctx.provider_snapshot),
+                        timing_ms={"retrieval": retrieval_timing_ms},
+                        hits_count=hits_count,
+                    )  # docstring: debug 模式返回完整 payload
+                else:
+                    debug_payload = _build_records_payload(
+                        retrieval_record_id=retrieval_record_id,
+                        generation_record_id=None,
+                        evaluation_record_id=None,
+                        hits_count=hits_count,
+                    )  # docstring: return_records 仅输出 record_id
 
             log_event(
                 logger,
@@ -1002,27 +1034,33 @@ async def chat(
 
         total_ms = (time.perf_counter() - start_ts) * 1000.0  # docstring: 总耗时
         timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 总耗时快照
-        debug_payload = (
-            _build_debug_payload(
-                retrieval_record_id=retrieval_record_id,
-                generation_record_id=generation_record_id,
-                evaluation_record_id=evaluation_record_id,
-                retrieval_gate=retrieval_gate,
-                generation_gate=generation_gate,
-                evaluator_gate=evaluator_gate,
-                provider_snapshot=_merge_provider_snapshot(
-                    retrieval_provider_snapshot, generation_provider_snapshot, ctx.provider_snapshot
-                ),
-                timing_ms={
-                    "retrieval": retrieval_timing_ms,
-                    "generation": generation_timing_ms,
-                    "evaluator": evaluation_timing_ms,
-                },
-                hits_count=hits_count,
-            )
-            if debug
-            else None
-        )
+        debug_payload = None
+        if debug or return_records:
+            if debug:
+                debug_payload = _build_debug_payload(
+                    retrieval_record_id=retrieval_record_id,
+                    generation_record_id=generation_record_id,
+                    evaluation_record_id=evaluation_record_id,
+                    retrieval_gate=retrieval_gate,
+                    generation_gate=generation_gate,
+                    evaluator_gate=evaluator_gate,
+                    provider_snapshot=_merge_provider_snapshot(
+                        retrieval_provider_snapshot, generation_provider_snapshot, ctx.provider_snapshot
+                    ),
+                    timing_ms={
+                        "retrieval": retrieval_timing_ms,
+                        "generation": generation_timing_ms,
+                        "evaluator": evaluation_timing_ms,
+                    },
+                    hits_count=hits_count,
+                )  # docstring: debug 模式返回完整 payload
+            else:
+                debug_payload = _build_records_payload(
+                    retrieval_record_id=retrieval_record_id,
+                    generation_record_id=generation_record_id,
+                    evaluation_record_id=evaluation_record_id,
+                    hits_count=hits_count,
+                )  # docstring: return_records 仅输出 record_id
 
         evaluator_summary = evaluator_result.summary  # docstring: evaluator 摘要
 

@@ -57,6 +57,8 @@ class ChatContextConfig(BaseModel):
     prompt_version: Optional[str] = Field(default=None)  # docstring: prompt 版本
 
     evaluator_config: Optional[Dict[str, Any]] = Field(default=None)  # docstring: evaluator 配置覆盖
+    return_records: Optional[bool] = Field(default=None)  # docstring: 仅返回 record_id（不输出 gate/provider）
+    return_hits: Optional[bool] = Field(default=None)  # docstring: 预留字段（是否返回 hits 详情）
 
 
 class ChatRequest(BaseModel):
