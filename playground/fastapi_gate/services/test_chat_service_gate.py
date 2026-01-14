@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,7 @@ from uae_law_rag.backend.kb.client import MilvusClient
 from uae_law_rag.backend.kb.index import MilvusIndexManager
 from uae_law_rag.backend.kb.repo import MilvusRepo
 from uae_law_rag.backend.kb.schema import build_collection_spec
+from uae_law_rag.backend.pipelines.generation import generator as generator_mod
 from uae_law_rag.backend.pipelines.ingest.pipeline import run_ingest_pdf
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.services.chat_service import chat
@@ -46,6 +47,30 @@ pytestmark = pytest.mark.fastapi_gate
 
 
 _ENV_BOOTSTRAPPED = False  # docstring: 防止重复加载 .env
+
+
+def _ensure_mock_llm_available() -> None:
+    """
+    [职责] 确认 MockLLM 可用（generation gate 依赖）。
+    [边界] 仅做 import 探测；不可用则跳过 gate。
+    [上游关系] gate test 调用。
+    [下游关系] 保障 generation/evaluator 可执行。
+    """
+    try:
+        from llama_index.core.llms import MockLLM  # type: ignore  # docstring: MockLLM 探测
+
+        _ = MockLLM  # docstring: 显式引用避免 lint 报警
+        return
+    except Exception:
+        try:
+            from llama_index.core.llms.mock import MockLLM  # type: ignore  # docstring: 兼容路径探测
+
+            _ = MockLLM  # docstring: 显式引用避免 lint 报警
+            return
+        except Exception:
+            pytest.skip(
+                "MockLLM not available; skip chat_service gate (generation/evaluator)."
+            )  # docstring: 依赖缺失跳过
 
 
 def _load_dotenv(path: Path) -> None:
@@ -161,6 +186,40 @@ async def _setup_milvus_collection(
     return client, idx, repo, spec
 
 
+def _patch_generation_run() -> Any:
+    """
+    [职责] 替换 generation.run_generation 以输出确定性 JSON（避免依赖外部 LLM 实现差异）。
+    [边界] 仅用于 gate 测试；必须在测试结束恢复原函数。
+    [上游关系] test_chat_service_gate 调用。
+    [下游关系] generation pipeline 使用该 mock 输出。
+    """
+    original = generator_mod.run_generation  # docstring: 保存原始 run_generation
+
+    async def _mock_run_generation(
+        *,
+        messages_snapshot: Mapping[str, Any],
+        model_provider: str,
+        model_name: str,
+        generation_config: Any = None,
+    ) -> Dict[str, Any]:
+        """
+        [职责] 生成 deterministic raw_text（引用 evidence 构造 citations）。
+        [边界] 不访问网络；不解析 JSON；仅返回 raw_text。
+        [上游关系] generation pipeline 调用。
+        [下游关系] postprocess 解析 raw_text 并生成 citations。
+        """
+        response_text = generator_mod._build_mock_response(messages_snapshot or {})  # docstring: 构造 mock JSON
+        return {
+            "raw_text": response_text,
+            "provider": str(model_provider or "mock"),
+            "model": str(model_name or "mock"),
+            "usage": None,
+        }  # docstring: mock generation 输出
+
+    generator_mod.run_generation = _mock_run_generation  # docstring: 安装 mock run_generation
+    return original  # docstring: 返回原函数用于恢复
+
+
 def _assert_debug_blocked(debug_payload: Dict[str, Any]) -> None:
     """
     [职责] 断言 blocked 路径的 debug 合同。
@@ -219,6 +278,7 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         pytest.skip(
             "Milvus env not configured. Set MILVUS_URI/MILVUS_URL or MILVUS_HOST/MILVUS_PORT."
         )  # docstring: 环境不可用直接跳过
+    _ensure_mock_llm_available()  # docstring: generation/evaluator 依赖检查
 
     pdf_file = _pdf_path()  # docstring: PDF fixture 路径
     if not pdf_file.exists():
@@ -249,6 +309,7 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
     client = None
     idx = None
     spec = None
+    original_run_generation = None  # docstring: 保存原始 generation.run_generation
     try:
         client, idx, repo, spec = await _setup_milvus_collection(
             collection_name=collection_name,
@@ -264,6 +325,8 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         )  # docstring: 导入 PDF 以生成检索证据
         assert ingest_result.node_count > 0  # docstring: ingest 必须产出节点
         await session.commit()  # docstring: 提交导入结果
+
+        original_run_generation = _patch_generation_run()  # docstring: 注入 mock generation
 
         base_context = {
             "embed_provider": "hash",
@@ -438,6 +501,8 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert failed_eval.status in {"fail", "skipped"}  # docstring: evaluation.status fail/skipped
 
     finally:
+        if original_run_generation is not None:
+            generator_mod.run_generation = original_run_generation  # docstring: 恢复 run_generation
         if idx is not None and spec is not None:
             try:
                 await idx.release_collection(spec.name)  # docstring: 释放 collection 资源

@@ -1009,9 +1009,9 @@ async def chat(
             message="embed_provider/embed_model is required"
         )  # docstring: 向量检索必须有 provider/model
 
-    default_chat_provider = "ollama" if settings.LOCAL_MODELS else "openai"  # docstring: chat provider 默认值
+    default_chat_provider = "ollama" if settings.LOCAL_MODELS else "dashscope"  # docstring: chat provider 默认值
     default_chat_model = (
-        settings.OLLAMA_CHAT_MODEL if settings.LOCAL_MODELS else "gpt-4o-mini"
+        settings.OLLAMA_CHAT_MODEL if settings.LOCAL_MODELS else "qwen3-max"
     )  # docstring: chat model 默认值
     llm_decision = _resolve_llm_decision(
         context=context_dict,
