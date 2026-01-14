@@ -131,6 +131,11 @@ async def test_ingest_dry_run_no_persist(
     assert res1["timing_ms"]["dry_run"] is True
     assert res1["file_id"] == res2["file_id"]
 
+    # dry_run must not leave any pending ORM state
+    assert len(session.new) == 0
+    assert len(session.dirty) == 0
+    assert len(session.deleted) == 0
+
     counts_after = {
         "file": await _count_rows(session, KnowledgeFileModel),
         "doc": await _count_rows(session, DocumentModel),
