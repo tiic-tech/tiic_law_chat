@@ -23,7 +23,7 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))  # docstring: ensure local src import
 
-from uae_law_rag.backend.api.deps import get_session
+from uae_law_rag.backend.api.deps import get_milvus_repo, get_session
 from uae_law_rag.backend.api.middleware import TraceContextMiddleware
 from uae_law_rag.backend.api.routers.health import router as health_router
 from uae_law_rag.backend.schemas.ids import new_uuid
@@ -60,15 +60,11 @@ async def test_health_router_gate(session: AsyncSession, monkeypatch: pytest.Mon
     async def _override_session() -> AsyncIterator[AsyncSession]:
         yield session  # docstring: reuse test session
 
-    monkeypatch.setattr(
-        "uae_law_rag.backend.api.routers.health.get_milvus_repo",
-        lambda: _MilvusRepoStub(),
-    )  # docstring: patch Milvus repo factory
-
     app = FastAPI()
     app.add_middleware(TraceContextMiddleware)  # docstring: inject trace/request headers
     app.include_router(health_router)  # docstring: mount health router
     app.dependency_overrides[get_session] = _override_session  # docstring: override session dep
+    app.dependency_overrides[get_milvus_repo] = lambda: _MilvusRepoStub()  # docstring: override Milvus dep
 
     transport = ASGITransport(app=app)  # docstring: ASGI transport for httpx
     headers = {

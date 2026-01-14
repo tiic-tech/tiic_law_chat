@@ -16,13 +16,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.api.deps import get_milvus_repo, get_session
+from uae_law_rag.backend.kb.repo import MilvusRepo
 
 
 router = APIRouter(prefix="/health", tags=["health"])  # docstring: health 路由前缀
 
 
 @router.get("")
-async def health_check(session: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+async def health_check(
+    session: AsyncSession = Depends(get_session),
+    milvus_repo: MilvusRepo = Depends(get_milvus_repo),
+) -> Dict[str, Any]:
     """
     [职责] 检测 DB/Milvus 可用性并返回健康摘要。
     [边界] 只做轻量探测；不做业务写入或耗时操作。
@@ -40,7 +44,6 @@ async def health_check(session: AsyncSession = Depends(get_session)) -> Dict[str
         db_status["error"] = f"{exc.__class__.__name__}: {exc}"  # docstring: 记录 DB 错误摘要
 
     try:
-        milvus_repo = get_milvus_repo()  # docstring: 仅在 health 中尝试装配 MilvusRepo
         client = getattr(milvus_repo, "_client", None)  # docstring: 获取底层 MilvusClient
         if client is None:
             raise RuntimeError("milvus client not available")  # docstring: 缺失 client 视为不可用
