@@ -271,6 +271,7 @@ async def test_chat_service_gate_retrieval_only(session: AsyncSession) -> None:
         blocked_msg = await msg_repo.get_by_id(response_blocked["message_id"])  # docstring: 回查 blocked message
         assert blocked_msg is not None
         assert blocked_msg.status == "blocked"  # docstring: message.status 必须 blocked
+        assert blocked_msg.error_message == "no_evidence"
         blocked_debug = response_blocked.get(DEBUG_KEY) or {}
         blocked_record_id = blocked_debug.get("retrieval_record_id")
         assert blocked_record_id  # docstring: blocked 也必须落 retrieval_record

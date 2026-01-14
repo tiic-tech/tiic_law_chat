@@ -98,6 +98,7 @@ def _resolve_value(
     *,
     key: str,
     context: Mapping[str, Any],
+    kb: Mapping[str, Any],
     settings: Mapping[str, Any],
     default: Any,
 ) -> tuple[Any, str]:
@@ -108,16 +109,19 @@ def _resolve_value(
     [下游关系] 返回值与来源标签。
     """
     if key in context and context.get(key) is not None:
-        return context.get(key), "context"  # docstring: context 覆盖
+        return context.get(key), "context"  # docstring: request/context 覆盖
+    if key in kb and kb.get(key) is not None:
+        return kb.get(key), "kb"  # docstring: KB 默认
     if key in settings and settings.get(key) is not None:
         return settings.get(key), "conversation"  # docstring: conversation settings 覆盖
-    return default, "kb"  # docstring: 回退 KB 默认
+    return default, "default"  # docstring: 最终兜底（不得散落硬编码）
 
 
 def _resolve_int_value(
     *,
     key: str,
     context: Mapping[str, Any],
+    kb: Mapping[str, Any],
     settings: Mapping[str, Any],
     default: int,
 ) -> int:
@@ -130,6 +134,7 @@ def _resolve_int_value(
     value, _source = _resolve_value(
         key=key,
         context=context,
+        kb=kb,
         settings=settings,
         default=default,
     )
@@ -140,11 +145,12 @@ def _resolve_int_value(
 
 def _resolve_embed_decision(
     *,
-    embed_provider: str,
-    embed_model: str,
-    embed_dim: Optional[int],
     context: Mapping[str, Any],
+    kb: Mapping[str, Any],
     settings: Mapping[str, Any],
+    default_embed_provider: str,
+    default_embed_model: str,
+    default_embed_dim: Optional[int],
 ) -> EmbedDecision:
     """
     [职责] 解析 embedding 决策（provider/model/dim）。
@@ -155,20 +161,23 @@ def _resolve_embed_decision(
     provider_raw, provider_src = _resolve_value(
         key="embed_provider",
         context=context,
+        kb=kb,
         settings=settings,
-        default=embed_provider,
+        default=default_embed_provider,
     )
     model_raw, model_src = _resolve_value(
         key="embed_model",
         context=context,
+        kb=kb,
         settings=settings,
-        default=embed_model,
+        default=default_embed_model,
     )
     dim_raw, dim_src = _resolve_value(
         key="embed_dim",
         context=context,
+        kb=kb,
         settings=settings,
-        default=embed_dim,
+        default=default_embed_dim,
     )
     source = provider_src if provider_src == model_src == dim_src else "mixed"  # docstring: 来源追踪
     provider = str(provider_raw or "").strip()
@@ -227,6 +236,7 @@ def _build_retrieval_config(
     fusion_top_k, _ = _resolve_value(
         key="fusion_top_k",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -235,6 +245,7 @@ def _build_retrieval_config(
     rerank_top_k, _ = _resolve_value(
         key="rerank_top_k",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -243,6 +254,7 @@ def _build_retrieval_config(
     fusion_strategy, _ = _resolve_value(
         key="fusion_strategy",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -251,6 +263,7 @@ def _build_retrieval_config(
     rerank_strategy, _ = _resolve_value(
         key="rerank_strategy",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -259,6 +272,7 @@ def _build_retrieval_config(
     output_fields, _ = _resolve_value(
         key="output_fields",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -267,6 +281,7 @@ def _build_retrieval_config(
     metric_type, _ = _resolve_value(
         key="metric_type",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -275,6 +290,7 @@ def _build_retrieval_config(
     file_id, _ = _resolve_value(
         key="file_id",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -283,6 +299,7 @@ def _build_retrieval_config(
     document_id, _ = _resolve_value(
         key="document_id",
         context=context,
+        kb={},
         settings=settings,
         default=None,
     )
@@ -443,13 +460,19 @@ async def chat(
     kb_collection = str(getattr(kb, "milvus_collection", "") or "")  # docstring: collection 快照
 
     settings = conv_settings  # docstring: 使用会话 settings 快照
+    kb_cfg = {
+        "embed_provider": kb_embed_provider,
+        "embed_model": kb_embed_model,
+        "embed_dim": kb_embed_dim,
+    }  # docstring: KB 侧配置快照（用于优先级解析）
     embed_decision = _resolve_embed_decision(
-        embed_provider=kb_embed_provider,
-        embed_model=kb_embed_model,
-        embed_dim=kb_embed_dim,
         context=context_dict,
+        kb=kb_cfg,
         settings=settings,
-    )  # docstring: embed 决策
+        default_embed_provider=kb_embed_provider,
+        default_embed_model=kb_embed_model,
+        default_embed_dim=kb_embed_dim,
+    )  # docstring: embed 决策（context > kb > conversation > default）
     embed_decision = _check_entitlement(embed_decision)  # docstring: entitlement 检查
 
     ctx.with_provider(
@@ -467,12 +490,14 @@ async def chat(
     keyword_top_k_raw = _resolve_int_value(
         key="keyword_top_k",
         context=context_dict,
+        kb={},
         settings=settings,
         default=200,
     )  # docstring: keyword top_k 原始值
     vector_top_k_raw = _resolve_int_value(
         key="vector_top_k",
         context=context_dict,
+        kb={},
         settings=settings,
         default=50,
     )  # docstring: vector top_k 原始值
@@ -482,7 +507,10 @@ async def chat(
         vector_top_k_raw = 0  # docstring: vector_top_k 负值归零
 
     keyword_top_k = int(max(1, keyword_top_k_raw))  # docstring: 记录用 keyword_top_k
-    vector_top_k_record = int(max(1, vector_top_k_raw))  # docstring: 记录用 vector_top_k
+    # NOTE: RetrievalRecord.vector_top_k schema 要求 >= 1。
+    # service 允许请求层 vector_top_k=0 表示“禁用向量”，但落库/record 层必须归一化为 >=1。
+    vector_top_k_requested = int(vector_top_k_raw)  # docstring: 请求层语义（可为 0）
+    vector_top_k_record = int(max(1, vector_top_k_requested))  # docstring: record 层语义（>=1）
 
     allow_vector = vector_top_k_raw > 0 and embed_decision.entitled  # docstring: 是否启用向量检索
 
@@ -493,8 +521,9 @@ async def chat(
         vector_top_k=vector_top_k_record,
         keyword_top_k=keyword_top_k,
     )  # docstring: 构造 retrieval 配置
-    if not allow_vector:
-        retrieval_config["vector_top_k"] = int(max(1, vector_top_k_record))  # docstring: 禁用向量但保留合法 top_k
+    # 明确记录“是否启用向量”的服务层裁决，同时保持 record/schema 合同（vector_top_k>=1）。
+    retrieval_config["vector_enabled"] = bool(allow_vector)  # docstring: 审计字段（pipeline 可忽略）
+    retrieval_config["vector_top_k_requested"] = int(vector_top_k_requested)  # docstring: 审计字段（pipeline 可忽略）
     if allow_vector and (not embed_decision.provider or not embed_decision.model):
         raise BadRequestError(
             message="embed_provider/embed_model is required"
