@@ -29,7 +29,6 @@ from uae_law_rag.backend.pipelines.base.context import PipelineContext
 from uae_law_rag.backend.pipelines.ingest import embed as embed_mod
 from uae_law_rag.backend.pipelines.evaluator import checks as evaluator_checks
 from uae_law_rag.backend.pipelines.evaluator.pipeline import run_evaluator_pipeline
-from uae_law_rag.backend.pipelines.generation.pipeline import run_generation_pipeline
 from uae_law_rag.backend.services._shared import (
     _normalize_context,
     _resolve_int_value,
@@ -37,13 +36,17 @@ from uae_law_rag.backend.services._shared import (
     _resolve_provider_mode,
     _resolve_value,
 )
+from uae_law_rag.backend.services.generation_service import (
+    GenerationGateDecision,
+    _extract_generation_citations,
+    execute_generation,
+)
 from uae_law_rag.backend.services.retrieval_service import (
     RetrievalGateDecision,
     execute_retrieval,
 )
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.schemas.evaluator import EvaluatorConfig, EvaluationResult
-from uae_law_rag.backend.schemas.generation import GenerationBundle
 from uae_law_rag.backend.utils.constants import (
     DEFAULT_PROMPT_NAME,
     DEFAULT_PROMPT_VERSION,
@@ -119,19 +122,6 @@ class LlmDecision:
     source: str
     entitled: bool
     entitlement_reason: Optional[str]
-
-
-@dataclass(frozen=True)
-class GenerationGateDecision:
-    """
-    [职责] GenerationGateDecision：封装 generation gate 状态与原因。
-    [边界] 仅记录生成状态，不裁决 message.status。
-    [上游关系] chat_service 在 generation pipeline 完成后调用。
-    [下游关系] chat_service debug 输出与 evaluator 输入。
-    """
-
-    status: str
-    reasons: Sequence[str]
 
 
 @dataclass(frozen=True)
@@ -519,23 +509,6 @@ def _advance_state(current: str, next_state: str) -> str:
     return next_state
 
 
-def _evaluate_generation_gate(bundle: GenerationBundle) -> GenerationGateDecision:
-    """
-    [职责] 执行最小 generation gate 记录（状态 + 原因）。
-    [边界] 不裁决 message.status；仅记录 generation 状态。
-    [上游关系] chat(...) 在 generation pipeline 后调用。
-    [下游关系] debug 输出与 evaluator 裁决解释。
-    """
-    status = str(getattr(bundle.record, "status", "") or "failed").strip().lower()
-    reasons = []
-    error_message = str(getattr(bundle.record, "error_message", "") or "").strip()
-    if error_message:
-        reasons.append(error_message)  # docstring: 透传 generation 错误
-    if status and status != "success":
-        reasons.append(f"generation_status={status}")  # docstring: 记录状态
-    return GenerationGateDecision(status=status or "failed", reasons=tuple(reasons))
-
-
 def _evaluate_evaluator_gate(result: EvaluationResult) -> EvaluatorGateDecision:
     """
     [职责] 解析 evaluator 结果并生成 gate 决策（status + reasons）。
@@ -662,31 +635,6 @@ def _build_evaluator_summary(
         "rule_version": str(evaluator.config.rule_version),
         "warnings": [w for w in warnings if w],
     }  # docstring: evaluator 摘要
-
-
-def _extract_generation_citations(bundle: Optional[GenerationBundle]) -> list[Dict[str, Any]]:
-    """
-    [职责] 从 GenerationBundle 提取 citations 列表（JSON-safe）。
-    [边界] bundle 缺失或格式异常时返回空列表。
-    [上游关系] chat(...) generation 结束后调用。
-    [下游关系] response.citations。
-    """
-    if bundle is None:
-        return []  # docstring: 无 bundle 直接回退
-    payload = getattr(bundle.record, "citations", None)  # docstring: CitationsPayload
-    if payload is None:
-        return []  # docstring: 缺失 citations 回退空
-    if hasattr(payload, "model_dump"):
-        items = payload.model_dump().get("items")  # type: ignore[attr-defined]
-    elif hasattr(payload, "dict"):
-        items = payload.dict().get("items")  # type: ignore[call-arg]
-    elif isinstance(payload, Mapping):
-        items = payload.get("items")
-    else:
-        items = None
-    if isinstance(items, list):
-        return list(items)  # docstring: citations items
-    return []  # docstring: 非列表回退空
 
 
 def _classify_error(exc: Exception, *, stage: Optional[str]) -> DomainError:
@@ -1046,20 +994,20 @@ async def chat(
 
         state = _advance_state(state, STATE_GENERATION_DONE)  # docstring: 状态推进到 GENERATION_DONE
         current_stage = "generation"
-        generation_bundle = await run_generation_pipeline(
+        generation_result = await execute_generation(
             session=session,
             generation_repo=generation_repo,
             message_id=message_id,
             retrieval_bundle=bundle,
             config=generation_config,
             ctx=ctx,
-        )  # docstring: 执行 generation pipeline
+        )  # docstring: 执行 generation service
 
-        generation_record_id = str(generation_bundle.record.id)  # docstring: generation_record_id
-        # Prefer record-native fields for audit. Avoid reading from messages_snapshot.
-        generation_timing_ms = dict(getattr(generation_bundle.record, "timing_ms", {}) or {})  # type: ignore[assignment]
-        generation_provider_snapshot = dict(getattr(generation_bundle.record, "provider_snapshot", {}) or {})  # type: ignore[assignment]
-        generation_gate = _evaluate_generation_gate(generation_bundle)  # docstring: generation gate 记录
+        generation_bundle = generation_result.bundle  # docstring: generation bundle
+        generation_record_id = generation_result.record_id  # docstring: generation_record_id
+        generation_timing_ms = generation_result.timing_ms  # docstring: timing_ms
+        generation_provider_snapshot = generation_result.provider_snapshot  # docstring: provider_snapshot
+        generation_gate = generation_result.gate  # docstring: generation gate 记录
         await session.commit()  # docstring: 提交 generation 结果（可回放）
 
         state = _advance_state(state, STATE_EVALUATION_DONE)  # docstring: 状态推进到 EVALUATION_DONE
