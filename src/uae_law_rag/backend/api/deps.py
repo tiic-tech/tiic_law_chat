@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import AsyncIterator
 
 from fastapi import Request
@@ -36,7 +37,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     [下游关系] repos/services 使用该 session。
     """
     async with SessionLocal() as session:
-        yield session  # docstring: 输出 session 给下游使用
+        try:
+            yield session  # docstring: 输出 session 给下游使用
+        except Exception:
+            # docstring: 请求链路异常时回滚，避免 session 污染
+            await session.rollback()
+            raise
 
 
 def get_trace_context(request: Request) -> TraceContext:
@@ -123,6 +129,7 @@ def get_evaluator_repo(session: AsyncSession) -> EvaluatorRepo:
     return EvaluatorRepo(session)  # docstring: 装配 evaluator repo
 
 
+@lru_cache(maxsize=1)
 def get_milvus_repo() -> MilvusRepo:
     """
     [职责] 获取 MilvusRepo 实例（向量库接口）。
