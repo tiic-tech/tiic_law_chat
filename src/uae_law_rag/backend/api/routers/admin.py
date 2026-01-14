@@ -93,12 +93,12 @@ async def list_kbs(
                 user_id=UUIDStr(str(kb.user_id)) if kb.user_id else None,
                 kb_name=str(kb.kb_name),
                 kb_info=str(kb.kb_info) if kb.kb_info is not None else None,
-                vs_type=str(kb.vs_type),
-                milvus_collection=str(kb.milvus_collection),
+                vs_type=str(kb.vs_type) if kb.vs_type is not None else None,
+                milvus_collection=str(kb.milvus_collection) if kb.milvus_collection is not None else None,
                 milvus_partition=str(kb.milvus_partition) if kb.milvus_partition else None,
-                embed_provider=str(kb.embed_provider),
-                embed_model=str(kb.embed_model),
-                embed_dim=int(kb.embed_dim),
+                embed_provider=str(kb.embed_provider) if kb.embed_provider is not None else None,
+                embed_model=str(kb.embed_model) if kb.embed_model is not None else None,
+                embed_dim=int(kb.embed_dim) if kb.embed_dim is not None else None,
                 rerank_provider=str(kb.rerank_provider) if kb.rerank_provider else None,
                 rerank_model=str(kb.rerank_model) if kb.rerank_model else None,
                 chunking_config=dict(kb.chunking_config or {}),
@@ -194,7 +194,15 @@ async def list_documents(
             stmt = stmt.where(DocumentModel.kb_id == str(kb_id))  # docstring: kb_id 过滤
         if file_id:
             stmt = stmt.where(DocumentModel.file_id == str(file_id))  # docstring: file_id 过滤
-        stmt = stmt.group_by(DocumentModel.id)  # docstring: group by 文档ID
+        stmt = stmt.group_by(
+            DocumentModel.id,
+            DocumentModel.kb_id,
+            DocumentModel.file_id,
+            DocumentModel.title,
+            DocumentModel.source_name,
+            DocumentModel.meta_data,
+            DocumentModel.created_at,
+        )  # docstring: group by 全字段（兼容 Postgres 等严格 SQL）
         stmt = stmt.order_by(DocumentModel.created_at.desc())  # docstring: 最新优先
         stmt = stmt.limit(int(limit)).offset(int(offset))  # docstring: 分页窗口
         rows = (await session.execute(stmt)).all()
