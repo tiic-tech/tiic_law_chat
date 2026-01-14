@@ -163,3 +163,7 @@ async def test_records_router_gate(session: AsyncSession, monkeypatch: pytest.Mo
 
     assert retrieval_resp.headers["x-trace-id"] == trace_id  # docstring: trace_id must propagate
     assert retrieval_resp.headers["x-request-id"] == request_id  # docstring: request_id must propagate
+    assert generation_resp.headers["x-trace-id"] == trace_id  # docstring: trace_id must propagate
+    assert generation_resp.headers["x-request-id"] == request_id  # docstring: request_id must propagate
+    assert evaluation_resp.headers["x-trace-id"] == trace_id  # docstring: trace_id must propagate
+    assert evaluation_resp.headers["x-request-id"] == request_id  # docstring: request_id must propagate

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -156,14 +156,24 @@ def _build_citations(citations: Any) -> List[CitationView]:
         locator = (
             dict(item.get("locator") or {}) if isinstance(item.get("locator"), dict) else {}
         )  # docstring: 归一化 locator
+        page_value = item.get("page", None)
+        if page_value is None:
+            page_value = locator.get("page", None)
+        article_id_value = item.get("article_id", None)
+        if article_id_value is None:
+            article_id_value = locator.get("article_id", None)
+        section_path_value = item.get("section_path", None)
+        if section_path_value is None:
+            section_path_value = locator.get("section_path", None)
+
         views.append(
             CitationView(
                 node_id=NodeId(node_id),
                 rank=item.get("rank"),
                 quote=str(item.get("quote") or ""),
-                page=item.get("page") or locator.get("page"),
-                article_id=item.get("article_id") or locator.get("article_id"),
-                section_path=item.get("section_path") or locator.get("section_path"),
+                page=page_value,
+                article_id=article_id_value,
+                section_path=section_path_value,
             )
         )  # docstring: 映射 CitationView
     return views  # docstring: 返回 citations 视图
@@ -228,14 +238,28 @@ async def get_retrieval_record(
             request_id=str(trace_context.request_id),
         )  # docstring: 异常映射为 ErrorResponse
 
+    def _opt_int(v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except Exception:
+            return None
+
+    def _opt_str(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
     strategy_snapshot = RetrievalStrategySnapshot(
-        keyword_top_k=int(record.keyword_top_k),
-        vector_top_k=int(record.vector_top_k),
-        fusion_top_k=int(record.fusion_top_k),
-        rerank_top_k=int(record.rerank_top_k),
-        fusion_strategy=str(record.fusion_strategy),
-        rerank_strategy=str(record.rerank_strategy),
-        provider_snapshot=dict(record.provider_snapshot or {}),
+        keyword_top_k=_opt_int(getattr(record, "keyword_top_k", None)),
+        vector_top_k=_opt_int(getattr(record, "vector_top_k", None)),
+        fusion_top_k=_opt_int(getattr(record, "fusion_top_k", None)),
+        rerank_top_k=_opt_int(getattr(record, "rerank_top_k", None)),
+        fusion_strategy=_opt_str(getattr(record, "fusion_strategy", None)),
+        rerank_strategy=_opt_str(getattr(record, "rerank_strategy", None)),
+        provider_snapshot=dict(getattr(record, "provider_snapshot", None) or {}),
     )  # docstring: 策略快照映射
 
     timing_ms = TimingMs.model_validate(record.timing_ms or {})  # docstring: timing_ms 映射
