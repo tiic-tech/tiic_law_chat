@@ -201,6 +201,7 @@ def _patch_generation_run() -> Any:
         model_provider: str,
         model_name: str,
         generation_config: Any = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         [职责] 生成 deterministic raw_text（引用 evidence 构造 citations）。
@@ -208,7 +209,13 @@ def _patch_generation_run() -> Any:
         [上游关系] generation pipeline 调用。
         [下游关系] postprocess 解析 raw_text 并生成 citations。
         """
-        response_text = generator_mod._build_mock_response(messages_snapshot or {})  # docstring: 构造 mock JSON
+        # NOTE:
+        # - gate 测试不应强依赖 generator_mod 的私有实现（_build_mock_response 可能被重构移除）。
+        # - 优先复用现有 helper；否则回退到最小可解析 JSON，保证 citations 至少 1 条。
+        if hasattr(generator_mod, "_build_mock_response"):
+            response_text = generator_mod._build_mock_response(messages_snapshot or {})  # type: ignore[attr-defined]
+        else:
+            response_text = '{"answer":"mock answer","citations":[{"doc_id":"mock","page":1,"chunk_id":"mock"}]}'
         return {
             "raw_text": response_text,
             "provider": str(model_provider or "mock"),
@@ -355,6 +362,9 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert response_blocked.get("answer") == ""  # docstring: blocked answer 为空
         assert response_blocked.get("citations") == []  # docstring: blocked citations 为空
         assert response_blocked.get(TRACE_ID_KEY)  # docstring: trace_id 必须存在
+        evaluator_summary = response_blocked.get("evaluator") or {}
+        assert evaluator_summary.get("status") == "skipped"  # docstring: blocked evaluator 必须 skipped
+        assert len(evaluator_summary.get("warnings") or []) >= 1  # docstring: blocked warnings 至少包含 no_evidence
         timing = response_blocked.get(TIMING_MS_KEY, {})
         assert TIMING_TOTAL_MS_KEY in timing  # docstring: total_ms 必须存在
 
