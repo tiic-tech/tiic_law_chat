@@ -1,3 +1,8 @@
+//docstring
+// 职责: 前端构建与开发服务器配置入口（含 alias 与 proxy）。
+// 边界: 不包含业务代码或运行时逻辑。
+// 上游关系: package.json scripts 调用。
+// 下游关系: Vite dev/build 流程读取本配置。
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
