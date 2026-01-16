@@ -44,6 +44,8 @@ def _candidate_to_hit(candidate: Candidate, *, rank: int) -> Dict[str, Any]:
     """
     meta = candidate.meta or {}  # docstring: 透传 meta 作为兜底
     page = candidate.page if candidate.page is not None else _coerce_int(meta.get("page"))  # docstring: 页码兜底
+    if page == 0:
+        page = None  # docstring: 禁止存储层 sentinel 泄漏到 DB
     start_offset = (
         candidate.start_offset if candidate.start_offset is not None else _coerce_int(meta.get("start_offset"))
     )  # docstring: 起始偏移兜底

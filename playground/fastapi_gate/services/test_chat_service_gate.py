@@ -408,6 +408,12 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert response_success.get("status") == "success"  # docstring: success 状态
         assert response_success.get("answer")  # docstring: success answer 非空
         assert len(response_success.get("citations") or []) >= 1  # docstring: success citations >= 1
+        citations = response_success.get("citations") or []
+        for c in citations:
+            loc = (c or {}).get("locator") or {}
+            # docstring: locator.page 不允许泄漏存储层 sentinel
+            assert loc.get("page") != 0
+
         assert response_success.get(TRACE_ID_KEY) == str(trace_context.trace_id)  # docstring: trace_id 透传
 
         msg_row = await msg_repo.get_by_id(response_success["message_id"])  # docstring: 回查 message
@@ -426,6 +432,10 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert retrieval_record is not None
         hits = await retrieval_repo.list_hits(retrieval_record.id)  # docstring: 回查 hits
         assert len(hits) > 0  # docstring: success 必须有命中
+
+        for h in hits:
+            # docstring: retrieval_hit.page 不允许为 0（未知页码必须用 NULL）
+            assert getattr(h, "page", None) != 0
 
         gen_record = await generation_repo.get_record_by_message(
             response_success["message_id"]

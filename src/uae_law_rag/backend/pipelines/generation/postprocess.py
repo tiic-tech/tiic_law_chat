@@ -279,8 +279,11 @@ def _build_locator_from_hit(hit: RetrievalHit) -> Dict[str, Any]:
     [上游关系] citation 对齐逻辑调用。
     [下游关系] Citation.locator。
     """
+    page = _coerce_int(_read_hit_field(hit, "page"))
+    if page == 0:
+        page = None  # docstring: 兼容历史 sentinel；locator 不允许出现 page=0
     locator = {
-        "page": _coerce_int(_read_hit_field(hit, "page")),
+        "page": page,
         "start_offset": _coerce_int(_read_hit_field(hit, "start_offset")),
         "end_offset": _coerce_int(_read_hit_field(hit, "end_offset")),
         "article_id": _coerce_str(_read_hit_field(hit, "article_id") or _read_hit_field(hit, "article")),

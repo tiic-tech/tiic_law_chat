@@ -114,11 +114,13 @@ def _normalize_page(value: Any) -> Optional[int]:
     if value is None:
         return None
     if isinstance(value, int):
-        return value
+        return None if value == 0 else value  # docstring: 0 作为未知页码 sentinel，统一归一为 None
     if isinstance(value, float):
-        return int(value)
+        v = int(value)
+        return None if v == 0 else v
     if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+        v = int(value.strip())
+        return None if v == 0 else v
     return None
 
 

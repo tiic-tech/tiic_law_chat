@@ -35,6 +35,8 @@ REQUIRED_FIELDS = [
     SECTION_PATH_FIELD,
 ]  # docstring: Milvus payload 必填字段（与 kb/schema 对齐）
 
+PAGE_UNKNOWN_SENTINEL = 0  # docstring: 存储层未知页码哨兵值（仅用于 Milvus 非空 int 字段兼容）
+
 
 def _normalize_entity(entity: Dict[str, Any], *, embed_dim: Optional[int] = None) -> Dict[str, Any]:
     """
@@ -66,7 +68,7 @@ def _normalize_entity(entity: Dict[str, Any], *, embed_dim: Optional[int] = None
 
     page = entity.get(PAGE_FIELD)
     if page is None:
-        page = 0  # docstring: page 缺失时用 0 表示未知
+        page = PAGE_UNKNOWN_SENTINEL  # docstring: 未知页码使用 sentinel；读路径必须归一化为 None
     page_val = int(page)  # docstring: 统一页码类型
 
     article_id = str(entity.get(ARTICLE_ID_FIELD) or "")  # docstring: 法条编号（允许空）

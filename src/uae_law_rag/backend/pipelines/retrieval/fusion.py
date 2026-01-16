@@ -107,9 +107,18 @@ def _choose_field(keyword_val: Optional[T], vector_val: Optional[T]) -> Optional
     [上游关系] 融合候选构造调用。
     [下游关系] Candidate.excerpt/page/offset。
     """
+    # docstring: 对字符串字段，空/纯空白视为缺失，允许 fallback（用于 excerpt 等）。
     if keyword_val is not None:
-        return keyword_val  # docstring: keyword 优先
-    return vector_val  # docstring: vector 兜底
+        if isinstance(keyword_val, str) and not keyword_val.strip():
+            pass  # docstring: 空字符串按缺失处理，继续 fallback
+        else:
+            return keyword_val  # docstring: keyword 优先
+
+    if vector_val is not None:
+        if isinstance(vector_val, str) and not vector_val.strip():
+            return None  # docstring: 两侧都是空字符串则视为缺失
+        return vector_val  # docstring: vector 兜底
+    return None
 
 
 def _build_score_details(
@@ -271,15 +280,20 @@ def fuse_candidates(
         )  # docstring: 分数细节快照
 
         meta = _merge_meta(keyword_cand, vector_cand)  # docstring: 合并 meta
+
+        excerpt = _choose_field(
+            keyword_cand.excerpt if keyword_cand else None,
+            vector_cand.excerpt if vector_cand else None,
+        )
+        if isinstance(excerpt, str) and not excerpt.strip():
+            excerpt = None  # docstring: 统一将空白 excerpt 视为缺失
+
         fused_candidate = Candidate(
             node_id=node_id,  # docstring: 节点ID
             stage="fusion",  # docstring: 标记 fusion 阶段
             score=fused_score,  # docstring: 融合分数
             score_details=score_details,  # docstring: 分数细节
-            excerpt=_choose_field(
-                keyword_cand.excerpt if keyword_cand else None,
-                vector_cand.excerpt if vector_cand else None,
-            ),
+            excerpt=excerpt,
             page=_choose_field(
                 keyword_cand.page if keyword_cand else None,
                 vector_cand.page if vector_cand else None,
