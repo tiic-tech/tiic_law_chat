@@ -15,6 +15,9 @@ from typing import Any, Dict
 from uae_law_rag.backend.utils.constants import META_KEY
 
 
+_PAGE_MARK_FMT = "<!-- page: {page_no} -->"  # docstring: segment/_extract_page_marks 可识别的分页标记
+
+
 def _load_pymupdf4llm() -> Any:
     """
     [职责] 延迟加载 pymupdf4llm 以避免在无依赖环境下 import 失败。
@@ -78,13 +81,28 @@ def _to_markdown(pdf_path: Path) -> str:
     [上游关系] parse_pdf 调用。
     [下游关系] parse_pdf 的 markdown 输出。
     """
-    mod = _load_pymupdf4llm()  # docstring: 获取 pymupdf4llm 模块
-    if not hasattr(mod, "to_markdown"):
-        raise AttributeError("pymupdf4llm.to_markdown is required")  # docstring: 强制使用官方入口
+    fitz = _load_pymupdf()  # docstring: PyMuPDF
+    mod = _load_pymupdf4llm()  # docstring: PyMuPDF4LLM
+    to_markdown = getattr(mod, "to_markdown", None)
+    if not callable(to_markdown):
+        raise RuntimeError("pymupdf4llm.to_markdown not available")  # docstring: 明确依赖缺失
 
-    to_markdown = getattr(mod, "to_markdown")  # docstring: 解析器主入口
+    chunks: list[str] = []
+    with fitz.open(pdf_path) as doc:
+        page_count = int(getattr(doc, "page_count", 0) or 0)
+        if page_count <= 0:
+            return ""  # docstring: 空文档兜底
+
+        # NOTE: pymupdf4llm pages 参数通常使用 0-based page indices。 [oai_citation:1‡Medium](https://medium.com/%40pymupdf/rag-llm-and-pdf-conversion-to-markdown-text-with-pymupdf-03af00259b5d)
+        for i in range(page_count):
+            page_no = i + 1
+            chunks.append(_PAGE_MARK_FMT.format(page_no=page_no))
+            chunks.append("")  # blank line
+            md_page = to_markdown(doc, pages=[i])  # docstring: 单页 markdown
+            chunks.append(str(md_page or "").strip())
+            chunks.append("")  # trailing blank line
     try:
-        raw = to_markdown(str(pdf_path), write_images=False)  # docstring: 生成 Markdown（不写图片）
+        raw = "\n".join(chunks).strip() + "\n"  # docstring: 统一换行，便于 offset 计算与 page_marks 匹配
     except TypeError:
         raw = to_markdown(str(pdf_path))  # docstring: 兼容旧版本参数签名
     return _normalize_markdown(raw)  # docstring: 归一化输出为 Markdown 字符串

@@ -12,8 +12,10 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
 from pathlib import Path
 from typing import Dict
+from collections import Counter
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +68,39 @@ def _load_dotenv(path: Path) -> None:
             continue  # docstring: 保留现有 env
         val = value.strip().strip("'").strip('"')  # docstring: 去除包裹引号
         os.environ[key] = val  # docstring: 写入环境变量
+
+
+def _debug_snapshot(*, f, doc, nodes, result) -> str:
+    pages = [n.page for n in nodes]
+    c = Counter("null" if p is None else ("zero" if int(p) == 0 else "pos") for p in pages)
+
+    # sample nodes for inspection (stable small sample)
+    sample = []
+    for n in sorted(nodes, key=lambda x: int(x.node_index))[:10]:
+        sample.append(
+            {
+                "node_id": str(n.id),
+                "node_index": int(n.node_index),
+                "page": n.page,
+                "start_offset": getattr(n, "start_offset", None),
+                "end_offset": getattr(n, "end_offset", None),
+                "article_id": getattr(n, "article_id", None),
+                "section_path": getattr(n, "section_path", None),
+                "text_head": (n.text or "")[:80],
+            }
+        )
+
+    snap = {
+        "file": {"id": str(f.id), "pages": f.pages, "status": f.ingest_status},
+        "document": {"id": str(doc.id)},
+        "result": {
+            "node_count": result.node_count,
+            "vector_count": getattr(result, "vector_count", None),
+        },
+        "node_page_distribution": dict(c),
+        "node_sample": sample,
+    }
+    return json.dumps(snap, ensure_ascii=False, indent=2)
 
 
 def _ensure_env_loaded() -> None:
@@ -204,6 +239,24 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
         assert len(nodes) == result.node_count
         nodes_sorted = sorted(list(nodes), key=lambda n: int(n.node_index))
         assert [n.node_index for n in nodes_sorted] == list(range(len(nodes_sorted)))
+
+        # --- after nodes loaded and basic checks done ---
+        dbg = _debug_snapshot(f=f, doc=doc, nodes=nodes, result=result)
+
+        # Hard signal: multi-page file but all node.page are NULL
+        if (f.pages or 0) > 1:
+            page_null = sum(1 for n in nodes if n.page is None)
+            if page_null == len(nodes):
+                pytest.fail(
+                    "All node.page are NULL while file.pages > 1. "
+                    "This strongly suggests page marks were not extracted OR persist_nodes did not write page.\n"
+                    f"DEBUG:\n{dbg}"
+                )
+
+        if (f.pages or 0) > 1:
+            any_page = any(n.page is not None for n in nodes)
+            if not any_page:
+                pytest.fail("Expected at least 1 node with non-null page for multi-page PDF.\n" + dbg)
 
         article_nodes = 0
         section_nodes = 0

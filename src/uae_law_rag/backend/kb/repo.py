@@ -50,6 +50,8 @@ class MilvusRepo:
         top_k: int,
         expr: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
+        metric_type: Optional[str] = None,
+        search_params: Optional[Dict[str, Any]] = None,
     ) -> List[List[Dict[str, Any]]]:
         """
         Vector search.
@@ -61,13 +63,19 @@ class MilvusRepo:
         col = await self._client.get_collection(collection)  # docstring: collection 句柄
 
         # pymilvus search signature: data, anns_field, param, limit, expr, output_fields
+        fields = list(output_fields or [])
+        if "node_id" not in fields:
+            fields.insert(0, "node_id")
+
+        mt = str(metric_type or "COSINE").strip().upper()
+        params = dict(search_params or {"ef": 128, "nprobe": 16})
         call = col.search(
             data=query_vectors,  # docstring: query vectors
             anns_field="embedding",  # docstring: 向量字段名（与 schema 常量一致）
-            param={"metric_type": "COSINE", "params": {"ef": 128, "nprobe": 16}},  # docstring: MVP 默认参数
+            param={"metric_type": mt, "params": params},  # docstring: 可接受外部传参
             limit=int(top_k),  # docstring: top_k
             expr=expr,  # docstring: 过滤表达式（kb/file/doc scope）
-            output_fields=output_fields,  # docstring: 返回的 payload 字段
+            output_fields=fields,  # docstring: 返回的 payload 字段
         )
         raw = await self._maybe_await(call)
 
@@ -83,7 +91,7 @@ class MilvusRepo:
                 payload: Dict[str, Any] = {}
                 if entity is not None:
                     # entity can behave like a dict with get()
-                    for f in output_fields or []:
+                    for f in fields:
                         try:
                             payload[f] = entity.get(f)
                         except Exception:

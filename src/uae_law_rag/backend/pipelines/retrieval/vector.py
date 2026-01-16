@@ -217,6 +217,7 @@ async def vector_recall(
         top_k=int(top_k),
         expr=expr,
         output_fields=fields,
+        metric_type=str(mt),
     )  # docstring: 向量检索
 
     hits = results[0] if results else []  # docstring: 单 query 的命中列表

@@ -38,6 +38,17 @@ class _PostprocessConfig:
     max_quote_chars: int
 
 
+def _normalize_page_value(val: Any) -> Optional[int]:
+    """Normalize page to 1-based positive int; 0/negative/invalid -> None."""  # docstring: 对外证据页码防御性归一化
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def _normalize_config(config: Optional[Mapping[str, Any]]) -> _PostprocessConfig:
     """
     [职责] 归一化 postprocess 配置。

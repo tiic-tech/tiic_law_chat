@@ -452,12 +452,29 @@ async def segment_nodes(
 
     payloads.sort(key=lambda x: x["__sort_key"])  # docstring: 按阅读顺序排序
 
+    def _normalize_page_value(val: Any) -> Optional[int]:
+        """Normalize page to 1-based int, forbid 0/negative; invalid -> None."""  # docstring: page 语义统一入口
+        if val is None:
+            return None
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return None  # docstring: 0/负数一律视为未知页
+        return n
+
     nodes_out: List[Dict[str, Any]] = []
     for idx, payload in enumerate(payloads):
         payload.pop("__sort_key", None)  # docstring: 移除内部排序字段
         payload["node_index"] = idx  # docstring: 文档内节点序号
-        if payload.get("page") is None and pages == 1:
-            payload["page"] = 1  # docstring: 单页文档页码兜底
+
+        # docstring: 统一 page 语义：必须为 1-based 正整数；禁止 0 泄漏到 DB/检索/Prompt
+        page_norm = _normalize_page_value(payload.get("page"))
+        if page_norm is None and pages == 1:
+            page_norm = 1  # docstring: 单页文档兜底为 1
+        payload["page"] = page_norm
+
         nodes_out.append(payload)
 
     return nodes_out
