@@ -253,6 +253,17 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
                     f"DEBUG:\n{dbg}"
                 )
 
+            pages_non_null = [int(n.page) for n in nodes if n.page is not None]
+            assert len(pages_non_null) > 0, "Expected at least 1 non-null node.page for multi-page PDF"
+            assert min(pages_non_null) >= 1, f"node.page must be >=1, got min={min(pages_non_null)}"
+            assert max(pages_non_null) <= int(
+                f.pages
+            ), f"node.page must not exceed file.pages={f.pages}, got max={max(pages_non_null)}"
+
+            # Optional: very loose coverage guardrail (detect obvious regressions)
+            ratio = len(pages_non_null) / max(len(nodes), 1)
+            assert ratio >= 0.2, f"page attribution coverage too low: {ratio:.2%}"
+
         if (f.pages or 0) > 1:
             any_page = any(n.page is not None for n in nodes)
             if not any_page:

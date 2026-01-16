@@ -172,11 +172,27 @@ def _page_for_offset(offset: Optional[int], marks: Sequence[Tuple[int, int]]) ->
     """
     if offset is None or not marks:
         return None
-    page = None
+
+    # marks 应当已按 offset 升序排序；这里做最小健壮性处理
+    first_offset, first_page = marks[0]
+    # 若 offset 落在第一个 mark 之前，返回第一个 mark 的 page，避免 page=None 的退化
+    if offset < first_offset:
+        try:
+            p = int(first_page)
+            return p if p > 0 else 1
+        except Exception:
+            return 1
+
+    page: Optional[int] = None
     for mark_offset, mark_page in marks:
         if offset < mark_offset:
             break
-        page = mark_page
+        try:
+            p = int(mark_page)
+            if p > 0:
+                page = p
+        except Exception:
+            continue
     return page
 
 
