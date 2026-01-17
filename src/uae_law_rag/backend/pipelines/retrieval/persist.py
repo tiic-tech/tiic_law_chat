@@ -119,7 +119,6 @@ async def persist_retrieval(
     *,
     retrieval_repo: RetrievalRepo,
     record_params: Mapping[str, Any],
-    hits: Sequence[Candidate],
     staged_hits: Optional[Mapping[str, Sequence[Candidate]]] = None,
 ) -> Tuple[str, int]:
     """
@@ -131,8 +130,10 @@ async def persist_retrieval(
     params = _normalize_record_params(record_params)  # docstring: 规范化 record 入参
     record = await retrieval_repo.create_record(**params)  # docstring: 先落 RetrievalRecord
 
-    # --- stage hits: keyword/vector/fused/reranked (for audit & recall eval) ---
-    staged_payloads: list[dict] = []
+    # staged first
+    all_payloads: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
     if staged_hits:
         for source, seq in staged_hits.items():
             src = str(source or "").strip() or "unknown"
@@ -140,20 +141,16 @@ async def persist_retrieval(
                 h = _candidate_to_hit(c, rank=i)
                 if not h:
                     continue
-                h["source"] = src  # docstring: 强制写入 stage source
-                staged_payloads.append(h)
+                node_id = str(h.get("node_id") or "").strip()
+                if not node_id:
+                    continue
+                h["source"] = src
+                key = (src, node_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_payloads.append(h)
 
-    # --- final hits: keep backward compatibility (generation consumes this list) ---
-    final_payloads = []
-    for i, c in enumerate(hits or [], start=1):
-        h = _candidate_to_hit(c, rank=i)
-        if not h:
-            continue
-        # docstring: 如果上游未写 source，则保持默认 fused；若上游已写（如 reranked），则尊重
-        h["source"] = str(h.get("source") or "fused")
-        final_payloads.append(h)
-
-    all_payloads = staged_payloads + final_payloads
     if all_payloads:
         await retrieval_repo.bulk_create_hits(
             retrieval_record_id=record.id,

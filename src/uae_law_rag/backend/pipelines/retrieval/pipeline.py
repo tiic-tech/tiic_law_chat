@@ -377,7 +377,6 @@ async def run_retrieval_pipeline(
     retrieval_record_id, _hit_count = await persist_mod.persist_retrieval(
         retrieval_repo=retrieval_repo,
         record_params=record_params,
-        hits=final_hits,
         staged_hits=staged_hits,
     )  # docstring: 落库 record + hits
 
