@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Dict
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.retrieval import RetrievalHitModel, RetrievalRecordModel
@@ -126,6 +127,14 @@ class RetrievalRepo:
             if end_offset is None and n is not None:
                 end_offset = getattr(n, "end_offset", None)
 
+            article_id = h.get("article_id")
+            if article_id is None and n is not None:
+                article_id = getattr(n, "article_id", None)
+
+            section_path = h.get("section_path")
+            if section_path is None and n is not None:
+                section_path = getattr(n, "section_path", None)
+
             obj = RetrievalHitModel(
                 retrieval_record_id=retrieval_record_id,
                 node_id=node_id,
@@ -137,6 +146,8 @@ class RetrievalRepo:
                 page=page,
                 start_offset=start_offset,
                 end_offset=end_offset,
+                article_id=article_id,
+                section_path=section_path,
             )
             objs.append(obj)
 
@@ -150,6 +161,7 @@ class RetrievalRepo:
             select(RetrievalHitModel)
             .where(RetrievalHitModel.retrieval_record_id == retrieval_record_id)
             .order_by(RetrievalHitModel.rank.asc())
+            .options(selectinload(RetrievalHitModel.node))
         )
         res = await self._session.scalars(stmt)
         return list(res.all())

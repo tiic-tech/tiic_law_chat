@@ -103,6 +103,12 @@ class RetrievalRecordView(BaseModel):
     timing_ms: TimingMs = Field(default_factory=TimingMs)  # docstring: 耗时摘要（ms）
     hits: List[HitSummary] = Field(default_factory=list)  # docstring: 命中摘要列表
 
+    # --- v1.1: staged hits for audit/eval (backward compatible) ---
+    hits_by_source: Dict[str, List[HitSummary]] = Field(
+        default_factory=dict
+    )  # docstring: 按 source 分组的命中摘要（keyword/vector/fused/reranked）
+    hit_counts: Dict[str, int] = Field(default_factory=dict)  # docstring: 每个 source 的命中数量
+
 
 class CitationView(BaseModel):
     """

@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Set, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.api.deps import get_session, get_trace_context
@@ -119,23 +119,49 @@ def _coerce_check_status(value: Any) -> CheckStatus:
     return cast(CheckStatus, "skipped")  # docstring: 非法值回退 skipped
 
 
-def _build_locator_from_hit(hit: Any) -> Dict[str, Any]:
+def _build_locator_from_hit(hit: Any) -> dict:
     """
-    [职责] 基于 RetrievalHit 组装 locator 结构。
-    [边界] 仅读取 hit 快照字段；不访问 node 关系。
-    [上游关系] retrieval 映射调用。
-    [下游关系] HitSummary.locator。
+    [职责] 从 RetrievalHitModel 构造 locator（禁止触发 relationship lazy load）。
+    [边界] 只使用 hit 自身冗余字段与 score_details，不访问 hit.node/record。
     """
-    node = getattr(hit, "node", None)
-    locator = _stable_locator(
-        page=getattr(hit, "page", None),
-        start_offset=getattr(hit, "start_offset", None),
-        end_offset=getattr(hit, "end_offset", None),
-        article_id=getattr(node, "article_id", None) if node else None,
-        section_path=getattr(node, "section_path", None) if node else None,
-        source=getattr(hit, "source", None),
-    )
-    return locator  # docstring: 返回 locator
+
+    def _opt_int(v: Any):
+        if v is None:
+            return None
+        try:
+            iv = int(v)
+            return None if iv == 0 else iv
+        except Exception:
+            return None
+
+    def _opt_str(v: Any):
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+    page = _opt_int(getattr(hit, "page", None))
+    start_offset = _opt_int(getattr(hit, "start_offset", None))
+    end_offset = _opt_int(getattr(hit, "end_offset", None))
+
+    # source：优先 hit.source，兜底 score_details 里的信息
+    source = _opt_str(getattr(hit, "source", None))
+    score_details = getattr(hit, "score_details", None) or {}
+    if not source and isinstance(score_details, dict):
+        source = _opt_str(score_details.get("source"))
+
+    # 这些字段如果你已经在 hit 表冗余了，就直接读；不要去 node 表拿
+    article_id = _opt_str(getattr(hit, "article_id", None))  # 若 hit 表没有该列，会得到 None
+    section_path = _opt_str(getattr(hit, "section_path", None))
+
+    return {
+        "page": page,
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "article_id": article_id,
+        "section_path": section_path,
+        "source": source,
+    }
 
 
 def _normalize_citation_items(citations: Any) -> List[Dict[str, Any]]:
@@ -236,6 +262,11 @@ def _build_checks_summary(checks: Any) -> List[EvaluationCheckSummary]:
 @router.get("/retrieval/{retrieval_record_id}", response_model=RetrievalRecordView)
 async def get_retrieval_record(
     retrieval_record_id: str,
+    sources: Optional[str] = Query(
+        default=None,
+        description="Comma-separated sources filter, e.g. keyword,vector,fused,reranked",
+    ),
+    group: bool = Query(default=True, description="Whether to return hits_by_source"),
     session: AsyncSession = Depends(get_session),
     trace_context: TraceContext = Depends(get_trace_context),
 ) -> RetrievalRecordView:
@@ -251,61 +282,89 @@ async def get_retrieval_record(
         if record is None:
             raise NotFoundError(message="retrieval record not found")  # docstring: 记录不存在
         hits = await repo.list_hits(str(retrieval_record_id))  # docstring: 获取 hits
+
+        def _opt_int(v: Any) -> Optional[int]:
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except Exception:
+                return None
+
+        def _opt_str(v: Any) -> Optional[str]:
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s or None
+
+        def _parse_sources(raw: Optional[str]) -> Optional[Set[str]]:
+            if raw is None:
+                return None
+            items: List[str] = []
+            for part in str(raw).split(","):
+                p = str(part).strip().lower()
+                if p:
+                    items.append(p)
+            return set(items) if items else None
+
+        source_filter = _parse_sources(sources)  # docstring: 可选 source 过滤集合
+
+        strategy_snapshot = RetrievalStrategySnapshot(
+            keyword_top_k=_opt_int(getattr(record, "keyword_top_k", None)),
+            vector_top_k=_opt_int(getattr(record, "vector_top_k", None)),
+            fusion_top_k=_opt_int(getattr(record, "fusion_top_k", None)),
+            rerank_top_k=_opt_int(getattr(record, "rerank_top_k", None)),
+            fusion_strategy=_opt_str(getattr(record, "fusion_strategy", None)),
+            rerank_strategy=_opt_str(getattr(record, "rerank_strategy", None)),
+            provider_snapshot=dict(getattr(record, "provider_snapshot", None) or {}),
+        )  # docstring: 策略快照映射
+
+        timing_ms = TimingMs.model_validate(record.timing_ms or {})  # docstring: timing_ms 映射
+
+        hit_views: List[HitSummary] = []
+        hits_by_source: Dict[str, List[HitSummary]] = {}
+        hit_counts: Dict[str, int] = {}
+
+        for hit in hits:
+            src = _coerce_hit_source(getattr(hit, "source", None))
+            # docstring: sources filter (if provided)
+            if source_filter is not None:
+                if str(src or "").strip().lower() not in source_filter:
+                    continue
+            hit_views.append(
+                HitSummary(
+                    node_id=NodeId(str(hit.node_id)),
+                    source=src,
+                    rank=int(hit.rank),
+                    score=float(getattr(hit, "score", 0.0) or 0.0),
+                    excerpt=str(hit.excerpt) if getattr(hit, "excerpt", None) else None,
+                    locator=_build_locator_from_hit(hit),
+                )
+            )  # docstring: 映射 HitSummary
+
+            if group:
+                k = str(src or "unknown")
+                hits_by_source.setdefault(k, []).append(hit_views[-1])
+                hit_counts[k] = int(hit_counts.get(k, 0)) + 1
+
+        return RetrievalRecordView(
+            retrieval_record_id=RetrievalRecordId(str(record.id)),
+            message_id=MessageId(str(record.message_id)),
+            kb_id=KnowledgeBaseId(str(record.kb_id)),
+            query_text=str(record.query_text),
+            strategy_snapshot=strategy_snapshot,
+            timing_ms=timing_ms,
+            hits=hit_views,
+            hits_by_source=hits_by_source if group else {},
+            hit_counts=hit_counts if group else {},
+        )  # docstring: 返回检索记录视图
+
     except Exception as exc:
         return to_json_response(  # type: ignore[return-value]
             exc,
             trace_id=str(trace_context.trace_id),
             request_id=str(trace_context.request_id),
         )  # docstring: 异常映射为 ErrorResponse
-
-    def _opt_int(v: Any) -> Optional[int]:
-        if v is None:
-            return None
-        try:
-            return int(v)
-        except Exception:
-            return None
-
-    def _opt_str(v: Any) -> Optional[str]:
-        if v is None:
-            return None
-        s = str(v).strip()
-        return s or None
-
-    strategy_snapshot = RetrievalStrategySnapshot(
-        keyword_top_k=_opt_int(getattr(record, "keyword_top_k", None)),
-        vector_top_k=_opt_int(getattr(record, "vector_top_k", None)),
-        fusion_top_k=_opt_int(getattr(record, "fusion_top_k", None)),
-        rerank_top_k=_opt_int(getattr(record, "rerank_top_k", None)),
-        fusion_strategy=_opt_str(getattr(record, "fusion_strategy", None)),
-        rerank_strategy=_opt_str(getattr(record, "rerank_strategy", None)),
-        provider_snapshot=dict(getattr(record, "provider_snapshot", None) or {}),
-    )  # docstring: 策略快照映射
-
-    timing_ms = TimingMs.model_validate(record.timing_ms or {})  # docstring: timing_ms 映射
-
-    hit_views: List[HitSummary] = []
-    for hit in hits:
-        hit_views.append(
-            HitSummary(
-                node_id=NodeId(str(hit.node_id)),
-                source=_coerce_hit_source(getattr(hit, "source", None)),
-                rank=int(hit.rank),
-                score=float(getattr(hit, "score", 0.0) or 0.0),
-                excerpt=str(hit.excerpt) if getattr(hit, "excerpt", None) else None,
-                locator=_build_locator_from_hit(hit),
-            )
-        )  # docstring: 映射 HitSummary
-
-    return RetrievalRecordView(
-        retrieval_record_id=RetrievalRecordId(str(record.id)),
-        message_id=MessageId(str(record.message_id)),
-        kb_id=KnowledgeBaseId(str(record.kb_id)),
-        query_text=str(record.query_text),
-        strategy_snapshot=strategy_snapshot,
-        timing_ms=timing_ms,
-        hits=hit_views,
-    )  # docstring: 返回检索记录视图
 
 
 @router.get("/generation/{generation_record_id}", response_model=GenerationRecordView)

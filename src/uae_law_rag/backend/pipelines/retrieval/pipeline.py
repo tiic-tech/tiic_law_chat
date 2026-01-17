@@ -331,6 +331,15 @@ async def run_retrieval_pipeline(
         ctx.timing.add_ms("rerank", 0.0, accumulate=False)  # docstring: 跳过 rerank 记 0ms
         final_hits = list(fused_hits)[: cfg.rerank_top_k]  # docstring: 无 rerank 时按 top_k 截断
 
+    # docstring: stage naming for audit/records API
+    staged_hits = {
+        "keyword": list(keyword_hits),
+        "vector": list(vector_hits),
+        "fused": list(fused_hits),
+        # docstring: 只有在 rerank 实际运行且产生差异时才更有意义，但先统一写入便于对比
+        "reranked": list(final_hits),
+    }
+
     # docstring: derive effective rerank strategy from output (rerank() writes 'none' on fallback)
     if final_hits:
         d0 = final_hits[0].score_details or {}
@@ -369,6 +378,7 @@ async def run_retrieval_pipeline(
         retrieval_repo=retrieval_repo,
         record_params=record_params,
         hits=final_hits,
+        staged_hits=staged_hits,
     )  # docstring: 落库 record + hits
 
     record = RetrievalRecord(

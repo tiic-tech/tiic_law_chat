@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
 from uae_law_rag.backend.pipelines.retrieval.types import Candidate, _coerce_int
@@ -120,6 +120,7 @@ async def persist_retrieval(
     retrieval_repo: RetrievalRepo,
     record_params: Mapping[str, Any],
     hits: Sequence[Candidate],
+    staged_hits: Optional[Mapping[str, Sequence[Candidate]]] = None,
 ) -> Tuple[str, int]:
     """
     [职责] persist_retrieval：写入 RetrievalRecord 与 hits，返回 record_id 与 hit_count。
@@ -130,11 +131,33 @@ async def persist_retrieval(
     params = _normalize_record_params(record_params)  # docstring: 规范化 record 入参
     record = await retrieval_repo.create_record(**params)  # docstring: 先落 RetrievalRecord
 
-    hit_payloads = [_candidate_to_hit(c, rank=i) for i, c in enumerate(hits, start=1)]  # docstring: 命中映射
-    if hit_payloads:
+    # --- stage hits: keyword/vector/fused/reranked (for audit & recall eval) ---
+    staged_payloads: list[dict] = []
+    if staged_hits:
+        for source, seq in staged_hits.items():
+            src = str(source or "").strip() or "unknown"
+            for i, c in enumerate(seq or [], start=1):
+                h = _candidate_to_hit(c, rank=i)
+                if not h:
+                    continue
+                h["source"] = src  # docstring: 强制写入 stage source
+                staged_payloads.append(h)
+
+    # --- final hits: keep backward compatibility (generation consumes this list) ---
+    final_payloads = []
+    for i, c in enumerate(hits or [], start=1):
+        h = _candidate_to_hit(c, rank=i)
+        if not h:
+            continue
+        # docstring: 如果上游未写 source，则保持默认 fused；若上游已写（如 reranked），则尊重
+        h["source"] = str(h.get("source") or "fused")
+        final_payloads.append(h)
+
+    all_payloads = staged_payloads + final_payloads
+    if all_payloads:
         await retrieval_repo.bulk_create_hits(
             retrieval_record_id=record.id,
-            hits=hit_payloads,
-        )  # docstring: 批量落库 hits
+            hits=all_payloads,
+        )  # docstring: 一次性批量落库所有 hits（staged + final）
 
-    return record.id, len(hit_payloads)
+    return record.id, len(all_payloads)

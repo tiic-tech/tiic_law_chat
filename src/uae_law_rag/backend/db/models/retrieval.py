@@ -223,6 +223,19 @@ class RetrievalHitModel(Base, TimestampMixin):
         comment="结束偏移快照（可选，冗余自 Node）",  # docstring: 证据定位辅助
     )
 
+    article_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="法条/条款标识（可选，如 Article 12）",  # docstring: UAE 法律结构化定位
+    )
+
+    section_path: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="层级路径（可选，如 Chapter/Section）",  # docstring: 结构化导航与展示
+    )
+
     record: Mapped["RetrievalRecordModel"] = relationship(
         "RetrievalRecordModel",
         back_populates="hits",
