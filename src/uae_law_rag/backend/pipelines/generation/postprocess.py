@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 from dataclasses import dataclass
 from uuid import UUID
@@ -193,36 +194,70 @@ def _build_hit_index(hits: Sequence[RetrievalHit]) -> Dict[str, RetrievalHit]:
     return hit_map
 
 
+_CODE_FENCE_OPEN_RE = re.compile(r"^\s*```(?:json)?\s*\n?", re.IGNORECASE)
+_CODE_FENCE_CLOSE_RE = re.compile(r"\n?\s*```\s*$", re.IGNORECASE)
+
+
+def _strip_code_fences(text: str) -> str:
+    """
+    [职责] 去掉最外层 Markdown code fence（``` / ```json）。
+    [边界] 只剥一层；不尝试处理嵌套/多段代码块。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    # Only strip if it looks like a single fenced block
+    if s.lstrip().startswith("```"):
+        s = _CODE_FENCE_OPEN_RE.sub("", s).strip()
+        s = _CODE_FENCE_CLOSE_RE.sub("", s).strip()
+    return s
+
+
 def _parse_json(raw_text: str, *, strict: bool) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     [职责] 解析 raw_text 为 JSON dict。
-    [边界] strict=True 时要求全文是 JSON；不尝试修复格式。
-    [上游关系] postprocess_generation 调用。
-    [下游关系] answer/citations 解析。
+    [边界] strict=True 时要求“最终内容可被视作一个 JSON 对象”；允许剥离最外层 code fence。
     """
-    text = str(raw_text or "").strip()  # docstring: raw_text 归一化
-    if not text:
-        return None, "raw_text is empty"  # docstring: 空输出错误
-    if strict:
-        try:
-            data = json.loads(text)  # docstring: 严格 JSON 解析
-        except json.JSONDecodeError as exc:
-            return None, f"json parse error: {exc}"  # docstring: 解析失败
-        if not isinstance(data, dict):
-            return None, "json root must be an object"  # docstring: root 结构校验
-        return dict(data), None  # docstring: 返回解析结果
+    text0 = str(raw_text or "").strip()
+    if not text0:
+        return None, "raw_text is empty"
 
-    start = text.find("{")  # docstring: 尝试提取 JSON 对象
-    end = text.rfind("}")  # docstring: 末尾 JSON 结束位置
+    text = _strip_code_fences(text0)  # NEW: tolerate ```json ... ```
+    if not text:
+        return None, "raw_text is empty"
+
+    # --- strict path ---
+    if strict:
+        # 1) try strict parse on stripped text
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # 2) strict fallback: allow extracting a single JSON object region
+            #    (still enforces root object)
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end < 0 or end <= start:
+                return None, "json parse error: unable to locate json object"
+            try:
+                data = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as exc2:
+                return None, f"json parse error: {exc2}"
+        if not isinstance(data, dict):
+            return None, "json root must be an object"
+        return dict(data), None
+
+    # --- non-strict path (existing behavior, but now after fence stripping) ---
+    start = text.find("{")
+    end = text.rfind("}")
     if start < 0 or end < 0 or end <= start:
-        return None, "json object not found"  # docstring: 未找到 JSON
+        return None, "json object not found"
     try:
-        data = json.loads(text[start : end + 1])  # docstring: 非严格 JSON 解析
+        data = json.loads(text[start : end + 1])
     except json.JSONDecodeError as exc:
-        return None, f"json parse error: {exc}"  # docstring: 解析失败
+        return None, f"json parse error: {exc}"
     if not isinstance(data, dict):
-        return None, "json root must be an object"  # docstring: root 结构校验
-    return dict(data), None  # docstring: 返回解析结果
+        return None, "json root must be an object"
+    return dict(data), None
 
 
 def _extract_answer(payload: Mapping[str, Any]) -> Tuple[str, Optional[str]]:

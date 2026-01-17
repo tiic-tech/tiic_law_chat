@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
@@ -238,16 +239,28 @@ def _build_error_raw(reason: str, detail: str) -> str:
 def _extract_answer_from_raw(raw_text: str) -> str:
     """
     [职责] 从 raw_text 尝试提取 answer（fallback）。
-    [边界] 仅尝试 JSON 解析；失败返回空。
-    [上游关系] run_generation_pipeline 调用。
-    [下游关系] GenerationBundle.answer。
+    [边界] 仅尝试 JSON 解析（支持 code fence / 包裹文本）；失败返回空。
     """
+    text0 = str(raw_text or "").strip()
+    if not text0:
+        return ""
+
+    # local minimal fence stripping (avoid importing private helpers)
+    if text0.lstrip().startswith("```"):
+        text0 = re.sub(r"^\s*```(?:json)?\s*\n?", "", text0, flags=re.IGNORECASE).strip()
+        text0 = re.sub(r"\n?\s*```\s*$", "", text0).strip()
+
+    start = text0.find("{")
+    end = text0.rfind("}")
+    if start < 0 or end < 0 or end <= start:
+        return ""
+
     try:
-        data = json.loads(str(raw_text or ""))  # docstring: 尝试解析 JSON
+        data = json.loads(text0[start : end + 1])
     except Exception:
-        return ""  # docstring: 解析失败回退空
+        return ""
     if isinstance(data, dict) and isinstance(data.get("answer"), str):
-        return str(data.get("answer") or "").strip()  # docstring: 提取 answer
+        return str(data.get("answer") or "").strip()
     return ""
 
 

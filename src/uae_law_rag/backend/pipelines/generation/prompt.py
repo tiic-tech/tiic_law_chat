@@ -33,22 +33,34 @@ _TEXT_KEYS = (
 
 SYSTEM_PROMPT = """You are UAE Law Assistant.
 
-Hard rules:
-- Use only the EVIDENCE provided. Do NOT use general knowledge.
-- Output JSON only with keys: answer, citations. No extra text.
-- A citation is valid only if its node_id exactly matches one of VALID NODE IDS.
-- If EVIDENCE is provided (not "(no evidence)"), you MUST produce at least 1 valid citation.
-- If you cannot produce at least 1 valid citation, return an empty answer:
-  {"answer":"","citations":[]}
-- Do not invent facts or node_id.
-"""  # docstring: system 角色与证据约束
+HARD RULES (must follow):
+1) Use ONLY the EVIDENCE provided. Do NOT use general knowledge.
+2) Output MUST be a single JSON object. No markdown. No prose. No code fences.
+3) Output JSON keys MUST be exactly: "answer", "citations". No extra keys.
+4) If EVIDENCE is not "(no evidence)", then citations MUST contain >= 1 VALID citation.
+5) A VALID citation object MUST include:
+   - "node_id": a non-empty string that EXACTLY matches one of VALID NODE IDS
+   - "rank": an integer >= 1
+   - "quote": optional string, copied from EVIDENCE (do not invent)
+6) INVALID citations include (examples): {}, {"rank":1}, {"node_id":""}, {"node_id":"not-in-list"}.
+7) If you cannot produce >= 1 VALID citation, you MUST output exactly:
+   {"answer":"","citations":[]}
+"""  # docstring: system 角色与证据约束（强约束 + 明确定义 invalid citation）
 
 OUTPUT_SCHEMA_EXAMPLE = """{
-  "answer": "string (grounded only in EVIDENCE)",
+  "answer": "string grounded only in EVIDENCE",
   "citations": [
-    {"node_id": "MUST_BE_ONE_OF_VALID_NODE_IDS", "rank": 1, "quote": "optional short quote copied from evidence"}
+    {"node_id": "ONE_OF_VALID_NODE_IDS", "rank": 1, "quote": "optional short quote copied from EVIDENCE"}
   ]
 }"""  # docstring: 输出结构示例
+
+BAD_OUTPUT_EXAMPLES = """Invalid outputs (do NOT do these):
+1) {"answer":"...","citations":[{}]}
+2) {"answer":"...","citations":[{"rank":1}]}
+3) {"answer":"...","citations":[{"node_id":"", "rank":1}]}
+4) {"answer":"...","citations":[{"node_id":"not-in-valid-ids", "rank":1}]}
+5) Any extra text outside JSON (markdown, explanations, etc.)
+"""  # docstring: 反例约束（对小模型很关键）
 
 
 def _normalize_query(query: str) -> str:
@@ -355,9 +367,19 @@ def _build_user_prompt(
         evidence_block,
         "",
         f"VALID NODE IDS: {node_line}",
-        "REQUIREMENT:",
-        "- If EVIDENCE is not empty, citations MUST be non-empty (>= 1) and node_id MUST be from VALID NODE IDS.",
-        '- If you cannot comply, output {"answer":"","citations":[]}.',
+        "",
+        "REQUIREMENTS (strict, checklist):",
+        "A) Output exactly one JSON object with ONLY keys: answer, citations.",
+        "B) If EVIDENCE is not '(no evidence)':",
+        "   - citations MUST have >= 1 item",
+        "   - each citation MUST include node_id and rank",
+        "   - node_id MUST be copied from VALID NODE IDS (exact match)",
+        "   - rank MUST be an integer >= 1",
+        "   - NEVER output empty object {} in citations",
+        'C) If you cannot comply, output exactly: {"answer":"","citations":[]}',
+        "",
+        "BAD OUTPUT EXAMPLES (do NOT do these):",
+        BAD_OUTPUT_EXAMPLES.strip(),
         "",
         "",
         "QUESTION:",
@@ -393,7 +415,7 @@ def build_messages(
         max_excerpt_chars=max_excerpt_chars,
     )  # docstring: evidence 列表
 
-    node_ids: List[str] = []  # docstring: node_id 去重列表
+    node_ids: List[str] = []  # docstring: node_id 去重列表（用于 VALID NODE IDS）
     seen: set[str] = set()  # docstring: 去重缓存
     for item in evidence_items:
         node_id = str(item.get("node_id") or "").strip()
@@ -401,6 +423,11 @@ def build_messages(
             continue
         seen.add(node_id)  # docstring: 记录已见 node_id
         node_ids.append(node_id)  # docstring: 收集 node_id
+
+    # docstring: 小模型友好：限制 VALID NODE IDS 数量，提升“拷贝式引用”准确率
+    max_valid_ids = 12
+    if len(node_ids) > max_valid_ids:
+        node_ids = node_ids[:max_valid_ids]
 
     system_prompt = _build_system_prompt()  # docstring: system prompt
     user_prompt = _build_user_prompt(
