@@ -27,7 +27,8 @@ class KBView(BaseModel):
 
     model_config = ConfigDict(extra="forbid")  # docstring: 锁定对外字段
 
-    kb_id: KnowledgeBaseId = Field(...)  # docstring: KB ID
+    id: UUIDStr = Field(...)  # docstring: DB 主键（KnowledgeBaseModel.id）
+    kb_id: KnowledgeBaseId = Field(...)  # docstring: KB 业务ID（当前等于 kb_name，如 default）
     user_id: Optional[UUIDStr] = Field(default=None)  # docstring: 归属用户ID（可选）
     kb_name: str = Field(..., min_length=1, max_length=80)  # docstring: KB 名称
     kb_info: Optional[str] = Field(default=None, max_length=200)  # docstring: KB 简介

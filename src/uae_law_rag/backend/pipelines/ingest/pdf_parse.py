@@ -15,6 +15,10 @@ from typing import Any, Dict
 from uae_law_rag.backend.utils.constants import META_KEY
 
 
+# docstring: runtime fingerprint for debugging import path drift
+RUNTIME_FINGERPRINT = "SRC::pdf_parse::2026-01-17T10:30Z"
+
+
 _PAGE_MARK_FMT = "<!-- page: {page_no} -->"  # docstring: segment/_extract_page_marks 可识别的分页标记
 
 

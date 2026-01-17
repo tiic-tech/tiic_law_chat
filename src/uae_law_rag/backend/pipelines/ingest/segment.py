@@ -129,7 +129,7 @@ def _extract_section_marks(markdown: str) -> List[Tuple[int, str, Optional[str]]
     return marks
 
 
-def _extract_page_marks(markdown: str, pages: Optional[int]) -> List[Tuple[int, int]]:
+def _extract_page_marks(markdown: str, pages: Optional[int] = 1) -> List[Tuple[int, int]]:
     """
     [职责] 从 Markdown 中提取页面标记（offset -> page）。
     [边界] 仅基于常见模式；无法识别时返回空列表。

@@ -9,12 +9,53 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel, NodeModel, NodeVectorMapModel
 from uae_law_rag.backend.db.repo.ingest_repo import IngestRepo
 from uae_law_rag.backend.utils.constants import META_DATA_KEY
+
+
+_ARTICLE_RE = re.compile(r"\bArticle\s*[\(\[]?\s*(\d+)\s*[\)\]]?\b", flags=re.IGNORECASE)
+
+
+def _extract_article_id(s: Optional[str]) -> Optional[str]:
+    if not s:
+        return None
+    m = _ARTICLE_RE.search(str(s))
+    if not m:
+        return None
+    num = m.group(1)
+    return f"Article {num}" if num else None
+
+
+def _coerce_int(v: Any) -> Optional[int]:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+
+def _coerce_page(payload: dict) -> Optional[int]:
+    # accept multiple upstream keys to avoid silent drift
+    for k in ("page", "page_no", "page_number", "pageIndex", "page_idx"):
+        if k in payload:
+            p = _coerce_int(payload.get(k))
+            if p is None or p <= 0:
+                return None
+            return p
+    return None
 
 
 def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -30,15 +71,25 @@ def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, 
         if not text_raw.strip():
             raise ValueError("node.text is required")  # docstring: 禁止空节点
         node_index = int(n.get("node_index", i))  # docstring: node_index 兜底
+
+        # --- page: tolerate upstream key drift + enforce int/positive ---
+        page = _coerce_page(n)
+
+        # --- article_id: keep upstream if present; else derive from section_path/text ---
+        section_path = n.get("section_path")
+        article_id = n.get("article_id")
+        if not (article_id and str(article_id).strip()):
+            article_id = _extract_article_id(str(section_path or "")) or _extract_article_id(text_raw)
+
         normalized.append(
             {
                 "node_index": node_index,
                 "text": text_raw,
-                "page": n.get("page"),
-                "article_id": n.get("article_id"),
-                "section_path": n.get("section_path"),
-                "start_offset": n.get("start_offset"),
-                "end_offset": n.get("end_offset"),
+                "page": page,
+                "article_id": article_id,
+                "section_path": section_path,
+                "start_offset": _coerce_int(n.get("start_offset")),
+                "end_offset": _coerce_int(n.get("end_offset")),
                 META_DATA_KEY: n.get(META_DATA_KEY) or {},
             }
         )

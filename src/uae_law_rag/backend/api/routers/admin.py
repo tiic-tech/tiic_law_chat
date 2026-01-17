@@ -89,7 +89,8 @@ async def list_kbs(
     for kb in rows:
         views.append(
             KBView(
-                kb_id=KnowledgeBaseId(str(kb.id)),
+                id=UUIDStr(str(kb.id)),
+                kb_id=KnowledgeBaseId(str(kb.kb_name)),
                 user_id=UUIDStr(str(kb.user_id)) if kb.user_id else None,
                 kb_name=str(kb.kb_name),
                 kb_info=str(kb.kb_info) if kb.kb_info is not None else None,
