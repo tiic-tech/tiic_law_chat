@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+from sqlite3 import InternalError
 from typing import Any, Dict, List, Optional, Set, cast
 
 from fastapi import APIRouter, Depends, Query
@@ -20,6 +23,7 @@ from uae_law_rag.backend.api.schemas_http._common import (
     EvaluationRecordId,
     GenerationRecordId,
     KnowledgeBaseId,
+    KnowledgeFileId,
     MessageId,
     NodeId,
     DocumentId,
@@ -40,33 +44,37 @@ from uae_law_rag.backend.api.schemas_http.records import (
     TimingMs,
     NodeRecordView,
 )
-from uae_law_rag.backend.db.repo import EvaluatorRepo, GenerationRepo, RetrievalRepo, NodeRepo
+from uae_law_rag.backend.api.schemas_http.records_page import PageRecordView
+from uae_law_rag.backend.db.repo import EvaluatorRepo, GenerationRepo, RetrievalRepo, NodeRepo, DocumentRepo
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.utils.errors import NotFoundError
+from uae_law_rag.backend.utils.artifacts import read_text  # type: ignore
 
 
 router = APIRouter(prefix="/records", tags=["records"])  # docstring: records 路由前缀
 
 
-def _stable_locator(
-    *,
-    page: Optional[int],
-    start_offset: Optional[int],
-    end_offset: Optional[int],
-    article_id: Optional[str],
-    section_path: Optional[str],
-    source: Optional[str],
-) -> Dict[str, Any]:
-    if page == 0:
-        page = None
-    return {
-        "page": page,
-        "start_offset": start_offset,
-        "end_offset": end_offset,
-        "article_id": article_id,
-        "section_path": section_path,
-        "source": source,
-    }
+_PAGE_MARK_RE = re.compile(r"<!--\s*page:\s*(\d+)\s*-->", re.IGNORECASE)
+
+
+def _split_markdown_by_page(md: str) -> dict[int, str]:
+    """
+    [职责] 按 <!-- page: N --> 分割 markdown。
+    [边界] 若无 page mark，则返回 {1: md}（兼容单页/旧数据）。
+    """
+    text = str(md or "")
+    matches = list(_PAGE_MARK_RE.finditer(text))
+    if not matches:
+        return {1: text}
+
+    pages: dict[int, str] = {}
+    for i, m in enumerate(matches):
+        page_no = int(m.group(1))
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[start:end].strip()
+        pages[page_no] = chunk
+    return pages
 
 
 def _coerce_hit_source(value: Any) -> HitSource:
@@ -505,3 +513,75 @@ async def get_evaluation_record(
         rule_version=str(record.rule_version),
         checks_summary=_build_checks_summary(record.checks),
     )  # docstring: 返回评估记录视图
+
+
+@router.get("/page", response_model=PageRecordView)
+async def get_page_record(
+    document_id: str = Query(..., description="Document ID"),
+    page: int = Query(..., ge=1, description="Page number (1-based)"),
+    kb_id: Optional[str] = Query(default=None, description="Optional KB scope validation"),
+    max_chars: int = Query(default=8000, ge=0, le=200000, description="Max characters to return (0=full)"),
+    session: AsyncSession = Depends(get_session),
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> PageRecordView:
+    """
+    [职责] 回放文档某一页的完整解析文本（markdown），用于 PagePreview。
+    [边界] 只读；不重算 parse；要求 ingest 已持久化 parsed markdown path。
+    """
+    try:
+        repo = DocumentRepo(session)
+
+        doc = await repo.get_document(str(document_id))
+        if doc is None:
+            raise NotFoundError(message="document not found")
+
+        # docstring: optional kb scope
+        if kb_id is not None and str(getattr(doc, "kb_id", "") or "").strip() != str(kb_id).strip():
+            raise NotFoundError(message="document not found in kb scope")
+
+        file_id = str(getattr(doc, "file_id", "") or "").strip()
+        if not file_id:
+            raise InternalError("document missing file_id")
+
+        file_row = await repo.get_file(file_id)
+        pages_total = int(getattr(file_row, "pages", 0) or 0) or None
+
+        meta_doc = dict(getattr(doc, "meta_data", {}) or {})
+        md_path_raw = str(meta_doc.get("parsed_markdown_path") or "").strip()
+        if not md_path_raw:
+            raise NotFoundError(message="parsed markdown not available (re-ingest required)")
+
+        md_path = Path(md_path_raw).expanduser().resolve()
+        if not md_path.exists() or not md_path.is_file():
+            raise NotFoundError(message="parsed markdown file not found on disk")
+
+        md_text = read_text(md_path)
+        pages_map = _split_markdown_by_page(md_text)
+        if int(page) not in pages_map:
+            raise NotFoundError(message=f"page not found: {int(page)}")
+
+        content = pages_map[int(page)]
+        if max_chars > 0 and len(content) > int(max_chars):
+            content = content[: int(max_chars)]
+
+        meta: dict[str, Any] = {
+            "parsed_markdown_path": str(md_path),
+            "has_page_marks": bool(_PAGE_MARK_RE.search(md_text)),
+        }
+
+        return PageRecordView(
+            kb_id=KnowledgeBaseId(str(getattr(doc, "kb_id", "") or "")),
+            document_id=DocumentId(str(getattr(doc, "id", "") or "")),
+            file_id=KnowledgeFileId(file_id),
+            page=int(page),
+            pages_total=pages_total,
+            content=str(content),
+            content_len=int(len(content)),
+            meta=meta,
+        )
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(trace_context.trace_id),
+            request_id=str(trace_context.request_id),
+        )

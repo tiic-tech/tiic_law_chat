@@ -21,6 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel, NodeVectorMapModel
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
+from uae_law_rag.backend.utils.artifacts import (
+    get_parsed_markdown_path,
+    write_text_atomic,
+)
 
 from . import embed as embed_mod
 from . import pdf_parse as pdf_parse_mod
@@ -145,6 +149,22 @@ async def run_ingest_pdf(
             parsed = await pdf_parse_mod.parse_pdf(
                 pdf_path=str(pdf_file), parser_name=parser_name, parse_version=parse_version
             )  # docstring: PDF → Markdown
+
+        # docstring: persist parsed markdown for replay (P2-0e)
+        try:
+            md_text = str((parsed or {}).get("markdown") or "")
+        except Exception:
+            md_text = ""
+        if not md_text.strip():
+            raise ValueError("parse produced empty markdown")  # docstring: 禁止空 markdown（否则无法 page 回放）
+
+        if file_row is None:
+            raise RuntimeError("file_row is required before persisting parsed markdown")
+
+        parsed_md_path = get_parsed_markdown_path(kb_id=kb_id, file_id=str(file_row.id))
+        write_text_atomic(parsed_md_path, md_text)
+        ctx.meta["parsed_markdown_path"] = str(parsed_md_path)  # docstring: ctx 记录回放路径
+
         parsed_pages = _infer_pages(parsed)  # docstring: 解析页数
         if parsed_pages is not None and file_row is not None:
             file_row.pages = parsed_pages  # docstring: 回填页数
@@ -186,6 +206,17 @@ async def run_ingest_pdf(
                 source_name=_file_name,
                 meta_data={"parser": parser_name, "parse_version": parse_version},
             )  # docstring: 落库 Document + Nodes
+
+        # docstring: persist replay pointers into Document meta_data (P2-0e)
+        try:
+            meta_doc = dict(getattr(doc, "meta_data", {}) or {})
+        except Exception:
+            meta_doc = {}
+        meta_doc["parsed_markdown_path"] = str(parsed_md_path)
+        if parsed_pages is not None:
+            meta_doc["pages"] = int(parsed_pages)
+        doc.meta_data = meta_doc
+        await session.flush()
 
         # IMPORTANT: bulk insert 返回顺序不保证；按 node_index 对齐以确保 node↔embedding 映射稳定
         nodes_out = sorted(list(nodes_out), key=lambda n: int(getattr(n, "node_index", 0)))

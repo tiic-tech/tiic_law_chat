@@ -36,8 +36,13 @@ class Settings(BaseSettings):
     # Prefer repo root by default; override via .env if needed.
     PROJECT_ROOT: str = str(REPO_ROOT)
 
-    DATA_RAW_PATH: str = str(DATA_ROOT / "raw")
-    DATA_PARSED_PATH: str = str(DATA_ROOT / "parsed")
+    UAE_LAW_RAG_DATA_RAW_PATH: str = str(DATA_ROOT / "raw")
+    UAE_LAW_RAG_DATA_PARSED_PATH: str = str(DATA_ROOT / "parsed")
+
+    UAE_LAW_RAG_DATABASE_URL: str = (
+        "sqlite+aiosqlite:////Volumes/Workspace/Projects/RAG/uae_law_rag/.Local/uae_law_rag.db"
+    )
+    UAE_LAW_RAG_SAMPLE_PDF: str = "/Volumes/Workspace/Projects/RAG/uae_law_rag/.data/raw/demo.pdf"
 
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str | None = "https://api.openai.com/v1"

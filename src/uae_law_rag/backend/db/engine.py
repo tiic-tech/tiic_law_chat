@@ -19,16 +19,48 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from .base import Base
 
 
+def _find_repo_root(start: Path) -> Path:
+    """
+    Best-effort repository root discovery (avoid cwd drift).
+    - Prefer the closest ancestor containing `pyproject.toml`.
+    - Fallback to filesystem root if not found.
+    """
+    cur = start.resolve()
+    for _ in range(20):
+        if (cur / "pyproject.toml").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return start.resolve()
+
+
+def _settings_db_url() -> str | None:
+    """
+    Try reading DB URL from pydantic Settings (.env supported).
+    Keep this optional to avoid hard binding engine.py to settings at import time.
+    """
+    try:
+        from uae_law_rag.config import settings as _settings  # type: ignore
+
+        v = str(getattr(_settings, "UAE_LAW_RAG_DATABASE_URL", "") or "").strip()
+        return v or None
+    except Exception:
+        return None
+
+
 def _default_db_url() -> str:
     """
     Resolve database URL.
 
     Priority:
-      1) env: UAE_LAW_RAG_DATABASE_URL
-      2) env: DATABASE_URL
-      3) fallback: local sqlite file
+        1) settings: UAE_LAW_RAG_DATABASE_URL (loads .env)
+        2) env: UAE_LAW_RAG_DATABASE_URL
+        3) env: DATABASE_URL
+        4) fallback: local sqlite file (repo-root/.Local/uae_law_rag.db)
     """  # docstring: 最小可用配置，不强绑任何 settings 框架
-    repo_root = Path(os.getcwd()).resolve()  # .../src/uae_law_rag/backend/db/engine.py -> repo root
+    here = Path(__file__).resolve()
+    repo_root = _find_repo_root(here)  # stable repo root, not cwd
     db_path = repo_root / ".Local" / "uae_law_rag.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return f"sqlite+aiosqlite:///{db_path.as_posix()}"
@@ -37,9 +69,15 @@ def _default_db_url() -> str:
 def resolve_db_url(override: str | None = None) -> str:
     if override:
         return override
+    s_url = _settings_db_url()
+    if s_url:
+        return s_url
     env_url = os.getenv("UAE_LAW_RAG_DATABASE_URL", "").strip()
     if env_url:
         return env_url
+    env_url2 = os.getenv("DATABASE_URL", "").strip()
+    if env_url2:
+        return env_url2
     return _default_db_url()
 
 
