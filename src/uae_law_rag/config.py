@@ -26,7 +26,7 @@ REPO_ROOT = _find_repo_root(PACKAGE_ROOT)
 
 # Keep package-local workspace as defaults (dev-friendly),
 # but allow full override via environment variables.
-DATA_ROOT = PACKAGE_ROOT / "raw_data"
+DATA_ROOT = REPO_ROOT / ".data"
 
 
 class Settings(BaseSettings):
@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     # Prefer repo root by default; override via .env if needed.
     PROJECT_ROOT: str = str(REPO_ROOT)
 
-    DATA_RAW_PATH: str = str(DATA_ROOT)
+    DATA_RAW_PATH: str = str(DATA_ROOT / "raw")
+    DATA_PARSED_PATH: str = str(DATA_ROOT / "parsed")
 
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str | None = "https://api.openai.com/v1"
