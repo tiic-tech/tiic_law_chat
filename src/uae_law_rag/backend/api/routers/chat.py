@@ -50,6 +50,7 @@ from uae_law_rag.backend.utils.constants import (
     TIMING_MS_KEY,
     TRACE_ID_KEY,
 )
+from uae_law_rag.backend.pipelines.evaluator.query_plan import build_query_plan  # type: ignore
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])  # docstring: chat 路由前缀
@@ -197,6 +198,17 @@ async def chat_endpoint(
     )  # docstring: 读取 debug payload
     debug_envelope: Optional[ChatDebugEnvelope] = None
     if isinstance(debug_payload, dict):
+        # docstring: 仅在 debug 模式下注入 query_plan（不改变主链路检索参数与返回结构）
+        if debug_enabled:
+            kb_id_for_plan = str(request.kb_id or "default").strip() or "default"
+            plan = build_query_plan(raw_query=str(request.query), kb_id=kb_id_for_plan)
+            debug_payload["query_plan"] = {
+                "raw_query": plan.raw_query,
+                "keywords_list": list(plan.keywords_list),
+                "enhanced_queries": list(plan.enhanced_queries),
+                "meta": dict(plan.meta),
+            }
+
         debug_envelope = _build_debug_envelope(
             trace_id=trace_id,
             request_id=request_id,

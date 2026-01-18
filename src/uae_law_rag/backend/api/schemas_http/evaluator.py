@@ -18,6 +18,8 @@ from uae_law_rag.backend.schemas.ids import KnowledgeBaseId  # type: ignore
 
 __all__ = [
     "QueryAnalysisView",
+    "QueryPlanRequest",
+    "QueryPlanResponse",
     "KeywordRecallMetricView",
     "KeywordRecallEvalRequest",
     "KeywordRecallEvalView",
@@ -35,6 +37,31 @@ class QueryAnalysisView(BaseModel):
     raw_query: str = Field(..., min_length=1, max_length=4096)
     keywords_list: List[str] = Field(default_factory=list)
     enhanced_queries: List[str] = Field(default_factory=list)
+
+
+class QueryPlanRequest(BaseModel):
+    """
+    [职责] QueryPlanRequest：query_plan 入参（规则版 v1，后续可扩展 locale/domain）。
+    [边界] 只读；不依赖 DB；不触发 retrieval/generation。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kb_id: KnowledgeBaseId = Field(...)
+    raw_query: str = Field(..., min_length=1, max_length=4096)
+
+
+class QueryPlanResponse(BaseModel):
+    """
+    [职责] QueryPlanResponse：query_plan 输出（面向前端/debug 的稳定合同）。
+    [边界] analysis 对齐 QueryAnalysisView；meta 承载策略与审计信息。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kb_id: KnowledgeBaseId = Field(...)
+    analysis: QueryAnalysisView = Field(...)
+    meta: Dict[str, object] = Field(default_factory=dict)
 
 
 class KeywordRecallMetricView(BaseModel):

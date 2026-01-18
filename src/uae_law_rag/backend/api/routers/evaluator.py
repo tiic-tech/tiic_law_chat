@@ -19,14 +19,51 @@ from uae_law_rag.backend.api.schemas_http.evaluator import (
     KeywordRecallEvalRequest,
     KeywordRecallEvalView,
     QueryAnalysisView,
+    QueryPlanRequest,
+    QueryPlanResponse,
 )  # type: ignore
 from uae_law_rag.backend.schemas.audit import TraceContext  # type: ignore
 from uae_law_rag.backend.pipelines.evaluator.keyword_recall import (
     evaluate_keyword_recall,
 )  # type: ignore
+from uae_law_rag.backend.pipelines.evaluator.query_plan import build_query_plan  # type: ignore
 
 
 router = APIRouter(prefix="/evaluator", tags=["evaluator"])  # docstring: evaluator 路由前缀
+
+
+@router.post("/query_plan", response_model=QueryPlanResponse)
+async def query_plan(
+    payload: QueryPlanRequest,
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> QueryPlanResponse:
+    """
+    [职责] 生成 QueryPlan（规则版 v1），用于 debug / evaluator 上游。
+    [边界] 只读；不写 DB；不依赖 session；不触发 retrieval/generation。
+    """
+    try:
+        plan = build_query_plan(
+            raw_query=str(payload.raw_query),
+            kb_id=str(payload.kb_id),
+        )
+
+        analysis = QueryAnalysisView(
+            raw_query=plan.raw_query,
+            keywords_list=list(plan.keywords_list),
+            enhanced_queries=list(plan.enhanced_queries),
+        )
+
+        return QueryPlanResponse(
+            kb_id=payload.kb_id,
+            analysis=analysis,
+            meta=dict(plan.meta),
+        )
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(getattr(trace_context, "trace_id", "") or ""),
+            request_id=str(getattr(trace_context, "request_id", "") or ""),
+        )
 
 
 @router.post("/keyword_recall", response_model=KeywordRecallEvalView)
