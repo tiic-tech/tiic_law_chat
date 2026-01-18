@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uae_law_rag.backend.api.deps import get_session, get_trace_context  # type: ignore
 from uae_law_rag.backend.api.errors import to_json_response  # type: ignore
 from uae_law_rag.backend.api.schemas_http.evaluator import (
+    KeywordRecallAutoDetailRequest,
     KeywordRecallAutoRequest,
     KeywordRecallEvalRequest,
     KeywordRecallEvalView,
@@ -157,6 +158,61 @@ async def keyword_recall_evaluator_auto(
             kb_id=payload.kb_id,
             analysis=analysis,
             metrics=result["metrics"],
+            timing_ms=result["timing_ms"],
+            meta=merged_meta,
+        )
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(getattr(trace_context, "trace_id", "") or ""),
+            request_id=str(getattr(trace_context, "request_id", "") or ""),
+        )
+
+
+@router.post("/keyword_recall_auto_detail", response_model=KeywordRecallEvalView)
+async def keyword_recall_evaluator_auto_detail(
+    payload: KeywordRecallAutoDetailRequest,
+    session: AsyncSession = Depends(get_session),
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> KeywordRecallEvalView:
+    """
+    [职责] 自动从 raw_query 生成 keywords_list，并执行 keyword recall evaluator（detail：含 samples）。
+    [边界] 只读计算；不写库；samples 受 sample_n 控制；用于前端 drill-down。
+    """
+    try:
+        plan = build_query_plan(
+            raw_query=str(payload.raw_query),
+            kb_id=str(payload.kb_id),
+        )
+
+        result = await evaluate_keyword_recall(
+            session=session,
+            kb_id=str(payload.kb_id),
+            raw_query=str(payload.raw_query),
+            keywords=list(plan.keywords_list),
+            keyword_top_k=(int(payload.keyword_top_k) if payload.keyword_top_k is not None else None),
+            allow_fallback=bool(payload.allow_fallback),
+            case_sensitive=bool(payload.case_sensitive),
+            sample_n=int(payload.sample_n),  # docstring: detail 才返回 samples
+            trace_id=str(getattr(trace_context, "trace_id", "") or ""),
+            request_id=str(getattr(trace_context, "request_id", "") or ""),
+        )
+
+        analysis = QueryAnalysisView(
+            raw_query=str(payload.raw_query),
+            keywords_list=list(plan.keywords_list),
+            enhanced_queries=list(plan.enhanced_queries),
+        )
+
+        merged_meta: Dict[str, object] = {}
+        merged_meta.update(dict(plan.meta or {}))
+        merged_meta.update(dict(result.get("meta") or {}))
+        merged_meta["detail"] = True  # docstring: 明确这是 detail 输出（便于前端/调试）
+
+        return KeywordRecallEvalView(
+            kb_id=payload.kb_id,
+            analysis=analysis,
+            metrics=result["metrics"],  # docstring: metrics 内含 missing_sample/extra_sample（由 pipeline 生成）
             timing_ms=result["timing_ms"],
             meta=merged_meta,
         )
