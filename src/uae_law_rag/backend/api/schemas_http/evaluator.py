@@ -22,6 +22,7 @@ __all__ = [
     "QueryPlanResponse",
     "KeywordRecallMetricView",
     "KeywordRecallEvalRequest",
+    "KeywordRecallAutoRequest",
     "KeywordRecallEvalView",
 ]
 
@@ -104,6 +105,24 @@ class KeywordRecallEvalRequest(BaseModel):
     kb_id: KnowledgeBaseId = Field(...)
     raw_query: str = Field(..., min_length=1, max_length=4096)
     keywords_list: List[str] = Field(default_factory=list, description="keywords to evaluate")
+
+    keyword_top_k: Optional[int] = Field(default=None, ge=1, le=5000)
+    allow_fallback: bool = Field(default=True)
+
+    case_sensitive: bool = Field(default=False)
+    sample_n: int = Field(default=20, ge=0, le=200)
+
+
+class KeywordRecallAutoRequest(BaseModel):
+    """
+    [职责] KeywordRecallAutoRequest：keyword recall 自动评估入参（P1-1）。
+    [边界] 自动从 raw_query 构造 keywords_list（query_plan rule_v1）；不写库；只读计算。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kb_id: KnowledgeBaseId = Field(...)
+    raw_query: str = Field(..., min_length=1, max_length=4096)
 
     keyword_top_k: Optional[int] = Field(default=None, ge=1, le=5000)
     allow_fallback: bool = Field(default=True)
