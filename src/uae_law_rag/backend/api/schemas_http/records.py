@@ -19,6 +19,7 @@ from ._common import (
     KnowledgeBaseId,
     MessageId,
     NodeId,
+    DocumentId,
     RetrievalRecordId,
 )
 
@@ -176,3 +177,30 @@ class EvaluationRecordView(BaseModel):
     status: EvaluationStatus = Field(default="pass")  # docstring: 评估状态
     rule_version: str = Field(default="v0")  # docstring: 规则版本
     checks_summary: List[EvaluationCheckSummary] = Field(default_factory=list)  # docstring: 规则检查摘要列表
+
+
+class NodeRecordView(BaseModel):
+    """
+    [职责] NodeRecordView：Node 回放视图（供 EvidencePanel / NodePreview 使用）。
+    [边界] 默认只返回 excerpt（受 max_chars 控制）；不返回全文以避免 payload 失控。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: NodeId = Field(...)
+    kb_id: Optional[KnowledgeBaseId] = Field(default=None)
+
+    document_id: DocumentId = Field(...)
+    node_index: int = Field(..., ge=0)
+
+    page: Optional[int] = Field(default=None, ge=1)
+    start_offset: Optional[int] = Field(default=None, ge=0)
+    end_offset: Optional[int] = Field(default=None, ge=0)
+
+    article_id: Optional[str] = Field(default=None)
+    section_path: Optional[str] = Field(default=None)
+
+    text_excerpt: str = Field(..., description="Truncated node text excerpt")
+    text_len: int = Field(..., ge=0)
+
+    meta: Dict[str, Any] = Field(default_factory=dict)

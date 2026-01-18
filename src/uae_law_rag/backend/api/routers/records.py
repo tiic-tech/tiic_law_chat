@@ -22,6 +22,7 @@ from uae_law_rag.backend.api.schemas_http._common import (
     KnowledgeBaseId,
     MessageId,
     NodeId,
+    DocumentId,
     RetrievalRecordId,
 )
 from uae_law_rag.backend.api.schemas_http.records import (
@@ -37,8 +38,9 @@ from uae_law_rag.backend.api.schemas_http.records import (
     RetrievalRecordView,
     RetrievalStrategySnapshot,
     TimingMs,
+    NodeRecordView,
 )
-from uae_law_rag.backend.db.repo import EvaluatorRepo, GenerationRepo, RetrievalRepo
+from uae_law_rag.backend.db.repo import EvaluatorRepo, GenerationRepo, RetrievalRepo, NodeRepo
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.utils.errors import NotFoundError
 
@@ -365,6 +367,70 @@ async def get_retrieval_record(
             trace_id=str(trace_context.trace_id),
             request_id=str(trace_context.request_id),
         )  # docstring: 异常映射为 ErrorResponse
+
+
+@router.get("/node/{node_id}", response_model=NodeRecordView)
+async def get_node_record(
+    node_id: str,
+    kb_id: Optional[str] = Query(default=None, description="Optional KB scope validation via node_vector_map"),
+    max_chars: int = Query(default=800, ge=50, le=5000, description="Max excerpt chars to return"),
+    session: AsyncSession = Depends(get_session),
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> NodeRecordView:
+    """
+    [职责] 获取 Node 回放视图（NodePreview）。
+    [边界] 仅查询；不重算；默认返回截断 excerpt。
+    """
+    try:
+        repo = NodeRepo(session)
+
+        node = None
+        kb_id_norm = str(kb_id or "").strip() or None
+        kb_for_view: Optional[str] = None
+
+        if kb_id_norm:
+            found = await repo.get_node_with_kb(node_id=str(node_id), kb_id=kb_id_norm)
+            if found is None:
+                raise NotFoundError(message="node not found in kb scope")  # docstring: kb 校验失败视为 not found
+            node = found.node
+            kb_for_view = found.kb_id or kb_id_norm
+        else:
+            node = await repo.get_node(str(node_id))
+            if node is None:
+                raise NotFoundError(message="node not found")
+
+        raw_text = str(getattr(node, "text", "") or "")
+        text_len = len(raw_text)
+        excerpt = raw_text[: int(max_chars)] if raw_text else ""
+        if raw_text and text_len > int(max_chars):
+            excerpt = excerpt.rstrip() + " …"  # docstring: 标记截断
+
+        so_raw = getattr(node, "start_offset", None)
+        eo_raw = getattr(node, "end_offset", None)
+        start_offset = int(so_raw) if so_raw is not None else None
+        end_offset = int(eo_raw) if eo_raw is not None else None
+
+        return NodeRecordView(
+            node_id=NodeId(str(node.id)),
+            kb_id=KnowledgeBaseId(kb_for_view) if kb_for_view else None,
+            document_id=DocumentId(str(node.document_id)),
+            node_index=int(getattr(node, "node_index", 0) or 0),
+            page=int(getattr(node, "page", 0) or 0) or None,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            article_id=(str(node.article_id).strip() or None) if getattr(node, "article_id", None) else None,
+            section_path=(str(node.section_path).strip() or None) if getattr(node, "section_path", None) else None,
+            text_excerpt=excerpt,
+            text_len=int(text_len),
+            meta=dict(getattr(node, "meta_data", None) or {}),
+        )
+
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(trace_context.trace_id),
+            request_id=str(trace_context.request_id),
+        )
 
 
 @router.get("/generation/{generation_record_id}", response_model=GenerationRecordView)

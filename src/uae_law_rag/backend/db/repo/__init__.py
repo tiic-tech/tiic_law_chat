@@ -16,6 +16,7 @@ from .ingest_repo import IngestRepo
 from .retrieval_repo import RetrievalRepo
 from .generation_repo import GenerationRepo
 from .evaluator_repo import EvaluatorRepo
+from .node_repo import NodeRepo  # noqa: F401
 
 __all__ = [
     "UserRepo",
@@ -25,4 +26,5 @@ __all__ = [
     "RetrievalRepo",
     "GenerationRepo",
     "EvaluatorRepo",
+    "NodeRepo",
 ]
