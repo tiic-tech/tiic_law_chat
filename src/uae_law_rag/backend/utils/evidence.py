@@ -170,24 +170,28 @@ def group_evidence_hits(
             continue  # docstring: per-doc node cap
 
         source_bucket = by_source.get(source)
-        by_document = source_bucket.get("by_document") if source_bucket else None
-        doc_entry = by_document.get(doc_id) if by_document else None
-        pages = doc_entry.get("pages") if doc_entry else None
-        page_count = len(pages) if pages is not None else 0
-        if page_key != _UNKNOWN_PAGE_KEY and page_key not in (pages or {}):
-            if page_count >= max_pages_i:
-                continue  # docstring: per-doc page cap
-
         if source_bucket is None:
             source_bucket = {"by_document": {}}  # docstring: init source bucket
             by_source[source] = source_bucket
 
         by_document = source_bucket["by_document"]
+        doc_entry = by_document.get(doc_id)
+        created_doc_entry = False
         if doc_entry is None:
             doc_entry = {"file_id": None, "pages": {}}  # docstring: init doc entry
             by_document[doc_id] = doc_entry
+            created_doc_entry = True
 
         pages = doc_entry["pages"]
+        if page_key != _UNKNOWN_PAGE_KEY and page_key not in pages:
+            known_pages_n = sum(1 for key in pages.keys() if key != _UNKNOWN_PAGE_KEY)
+            if known_pages_n >= max_pages_i:
+                if created_doc_entry and not pages:
+                    by_document.pop(doc_id, None)  # docstring: cleanup empty doc entry
+                    if not by_document:
+                        by_source.pop(source, None)  # docstring: cleanup empty source bucket
+                continue  # docstring: per-doc page cap
+
         if page_key not in pages:
             pages[page_key] = []  # docstring: init page list
 

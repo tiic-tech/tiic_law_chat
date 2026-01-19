@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -499,6 +499,124 @@ def _advance_state(current: str, next_state: str) -> str:
     return next_state
 
 
+def _read_field(obj: Any, key: str) -> Any:
+    """
+    [Responsibility] Read a field from object or mapping safely.
+    [Boundary] No exception; missing fields return None.
+    [Upstream] _extract_node_ids_from_hits/_extract_node_ids_from_citations use it.
+    [Downstream] debug document_id resolution.
+    """
+    if obj is None:
+        return None  # docstring: empty object fallback
+    if isinstance(obj, Mapping):
+        return obj.get(key)  # docstring: mapping access
+    return getattr(obj, key, None)  # docstring: attribute access
+
+
+def _coerce_node_id(value: Any) -> str:
+    """
+    [Responsibility] Normalize node_id into a stripped string.
+    [Boundary] Empty values return empty string.
+    """
+    return str(value or "").strip()  # docstring: string fallback
+
+
+def _dedupe_node_ids(values: Sequence[str]) -> List[str]:
+    """
+    [Responsibility] Dedupe node_ids while preserving order.
+    [Boundary] Empty/blank values are dropped.
+    """
+    out: List[str] = []  # docstring: output list
+    seen: set[str] = set()  # docstring: dedupe set
+    for value in values:
+        nid = _coerce_node_id(value)  # docstring: normalize node_id
+        if not nid or nid in seen:
+            continue  # docstring: skip empty/duplicate
+        seen.add(nid)  # docstring: mark seen
+        out.append(nid)  # docstring: append in order
+    return out
+
+
+def _extract_node_ids_from_hits(hits: Sequence[Any], *, source: Optional[str]) -> List[str]:
+    """
+    [Responsibility] Extract node_ids from hits, optionally filtered by source.
+    [Boundary] Unknown structure is ignored; only node_id is returned.
+    """
+    out: List[str] = []  # docstring: node_id list
+    source_norm = str(source or "").strip().lower()
+    for hit in hits or []:
+        hit_source = str(_read_field(hit, "source") or "").strip().lower()
+        if source_norm and hit_source != source_norm:
+            continue  # docstring: source mismatch
+        node_id = _coerce_node_id(_read_field(hit, "node_id") or _read_field(hit, "nodeId") or _read_field(hit, "id"))
+        if node_id:
+            out.append(node_id)  # docstring: append node_id
+    return out
+
+
+def _extract_node_ids_from_citations(citations: Sequence[Any]) -> List[str]:
+    """
+    [Responsibility] Extract node_ids from citations.
+    [Boundary] Unknown structure is ignored; only node_id is returned.
+    """
+    out: List[str] = []  # docstring: node_id list
+    for item in citations or []:
+        node_id = _coerce_node_id(
+            _read_field(item, "node_id") or _read_field(item, "nodeId") or _read_field(item, "id")
+        )
+        if node_id:
+            out.append(node_id)  # docstring: append node_id
+    return out
+
+
+def _pick_node_ids_for_document_id(
+    *,
+    hits: Optional[Sequence[Any]],
+    citations: Optional[Sequence[Any]],
+) -> List[str]:
+    """
+    [Responsibility] Pick node_ids for document_id resolution (prefer final hits).
+    [Boundary] Returns empty list when no usable nodes are found.
+    """
+    if hits:
+        for source in ("reranked", "fused", "vector", "keyword"):
+            ids = _extract_node_ids_from_hits(hits, source=source)
+            if ids:
+                return ids  # docstring: prefer first available source
+        ids = _extract_node_ids_from_hits(hits, source=None)
+        if ids:
+            return ids  # docstring: fallback to any hits
+    return _extract_node_ids_from_citations(citations or [])  # docstring: fallback to citations
+
+
+async def _resolve_single_document_id(
+    *,
+    retrieval_repo: RetrievalRepo,
+    node_ids: Sequence[str],
+) -> Optional[str]:
+    """
+    [Responsibility] Resolve a single document_id when all node_ids share the same doc.
+    [Boundary] Returns None if any node is missing a document_id or maps to multiple docs.
+    """
+    ids = _dedupe_node_ids(node_ids)
+    if not ids:
+        return None  # docstring: no nodes
+    doc_map = await retrieval_repo.resolve_document_ids_for_node_ids(ids)
+    if len(doc_map) != len(ids):
+        return None  # docstring: incomplete document_id mapping
+
+    doc_id: Optional[str] = None
+    for nid in ids:
+        resolved = str(doc_map.get(nid) or "").strip()
+        if not resolved:
+            return None  # docstring: missing document_id
+        if doc_id is None:
+            doc_id = resolved  # docstring: first document_id
+        elif resolved != doc_id:
+            return None  # docstring: multiple document_ids detected
+    return doc_id
+
+
 def _build_debug_payload(
     *,
     retrieval_record_id: Optional[str],
@@ -510,6 +628,7 @@ def _build_debug_payload(
     provider_snapshot: Optional[Dict[str, Any]],
     timing_ms: Optional[Dict[str, Any]],
     hits_count: Optional[int],
+    document_id: Optional[str],
 ) -> Dict[str, Any]:
     """
     [职责] 组装 debug 输出（record_id/gate/provider_snapshot/timing_ms）。
@@ -533,7 +652,7 @@ def _build_debug_payload(
             "status": str(evaluator_gate.status),
             "reasons": list(evaluator_gate.reasons),
         }  # docstring: evaluator gate 摘要
-    return {
+    payload = {
         "retrieval_record_id": retrieval_record_id,
         "generation_record_id": generation_record_id,
         "evaluation_record_id": evaluation_record_id,
@@ -542,6 +661,9 @@ def _build_debug_payload(
         "timing_ms": timing_ms or {},
         "hits_count": hits_count,
     }  # docstring: debug 字段集合
+    if document_id:
+        payload["document_id"] = str(document_id)  # docstring: debug.records.document_id
+    return payload
 
 
 def _build_records_payload(
@@ -550,6 +672,7 @@ def _build_records_payload(
     generation_record_id: Optional[str],
     evaluation_record_id: Optional[str],
     hits_count: Optional[int],
+    document_id: Optional[str],
 ) -> Dict[str, Any]:
     """
     [职责] 构造仅包含 record_id 的 payload（供 return_records 模式使用）。
@@ -566,6 +689,8 @@ def _build_records_payload(
         payload["evaluation_record_id"] = evaluation_record_id  # docstring: evaluation 记录ID
     if hits_count is not None:
         payload["hits_count"] = int(hits_count)  # docstring: 命中数量（可选）
+    if document_id:
+        payload["document_id"] = str(document_id)  # docstring: debug.records.document_id
     return payload  # docstring: 返回 records-only payload
 
 
@@ -905,6 +1030,11 @@ async def chat(
             timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 总耗时快照
             debug_payload = None
             if debug or return_records:
+                node_ids = _pick_node_ids_for_document_id(hits=bundle.hits, citations=None)
+                document_id = await _resolve_single_document_id(
+                    retrieval_repo=retrieval_repo,
+                    node_ids=node_ids,
+                )
                 if debug:
                     debug_payload = _build_debug_payload(
                         retrieval_record_id=retrieval_record_id,
@@ -916,6 +1046,7 @@ async def chat(
                         provider_snapshot=_merge_provider_snapshot(retrieval_provider_snapshot, ctx.provider_snapshot),
                         timing_ms={"retrieval": retrieval_timing_ms},
                         hits_count=hits_count,
+                        document_id=document_id,
                     )  # docstring: debug 模式返回完整 payload
                 else:
                     debug_payload = _build_records_payload(
@@ -923,6 +1054,7 @@ async def chat(
                         generation_record_id=None,
                         evaluation_record_id=None,
                         hits_count=hits_count,
+                        document_id=document_id,
                     )  # docstring: return_records 仅输出 record_id
 
             log_event(
@@ -1043,6 +1175,11 @@ async def chat(
         timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 总耗时快照
         debug_payload = None
         if debug or return_records:
+            node_ids = _pick_node_ids_for_document_id(hits=bundle.hits, citations=citations)
+            document_id = await _resolve_single_document_id(
+                retrieval_repo=retrieval_repo,
+                node_ids=node_ids,
+            )
             if debug:
                 debug_payload = _build_debug_payload(
                     retrieval_record_id=retrieval_record_id,
@@ -1060,6 +1197,7 @@ async def chat(
                         "evaluator": evaluation_timing_ms,
                     },
                     hits_count=hits_count,
+                    document_id=document_id,
                 )  # docstring: debug 模式返回完整 payload
             else:
                 debug_payload = _build_records_payload(
@@ -1067,6 +1205,7 @@ async def chat(
                     generation_record_id=generation_record_id,
                     evaluation_record_id=evaluation_record_id,
                     hits_count=hits_count,
+                    document_id=document_id,
                 )  # docstring: return_records 仅输出 record_id
 
         evaluator_summary = evaluator_result.summary  # docstring: evaluator 摘要

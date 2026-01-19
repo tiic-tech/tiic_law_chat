@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Dict
+from typing import Dict, List, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,6 +51,24 @@ class RetrievalRepo:
             if doc_id:
                 return doc_id
         return None
+
+    async def resolve_document_ids_for_node_ids(self, node_ids: Sequence[str]) -> Dict[str, str]:
+        """
+        Resolve document_id map by node_ids.
+        [边界] 只查 NodeModel.id/document_id，不触发 relationship。
+        """
+        ids = [str(x).strip() for x in (node_ids or []) if str(x).strip()]
+        if not ids:
+            return {}
+        stmt = select(NodeModel.id, NodeModel.document_id).where(NodeModel.id.in_(list(dict.fromkeys(ids))))
+        res = await self._session.execute(stmt)
+        rows = list(res.all())
+        out: Dict[str, str] = {}
+        for row in rows:
+            if not row or not row[0] or not row[1]:
+                continue
+            out[str(row[0])] = str(row[1])
+        return out
 
     async def create_record(
         self,

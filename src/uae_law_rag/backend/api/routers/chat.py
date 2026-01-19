@@ -135,7 +135,7 @@ def _build_debug_envelope(
     [下游关系] ChatResponse.debug 输出结构。
     """
     records: Dict[str, Any] = {}
-    for key in (RETRIEVAL_RECORD_ID_KEY, GENERATION_RECORD_ID_KEY, EVALUATION_RECORD_ID_KEY):
+    for key in (RETRIEVAL_RECORD_ID_KEY, GENERATION_RECORD_ID_KEY, EVALUATION_RECORD_ID_KEY, "document_id"):
         value = debug_payload.get(key)
         if value:
             records[key] = value  # docstring: 收集 record_id
@@ -155,7 +155,7 @@ def _build_debug_envelope(
     for key, value in debug_payload.items():
         if key in {"trace_id", "request_id", "records", "timing_ms", "gate"}:
             continue  # docstring: 避免覆盖基础字段
-        if key in {RETRIEVAL_RECORD_ID_KEY, GENERATION_RECORD_ID_KEY, EVALUATION_RECORD_ID_KEY}:
+        if key in {RETRIEVAL_RECORD_ID_KEY, GENERATION_RECORD_ID_KEY, EVALUATION_RECORD_ID_KEY, "document_id"}:
             continue  # docstring: record_id 已收敛到 records
         envelope[key] = value  # docstring: 合并额外 debug 字段
 
