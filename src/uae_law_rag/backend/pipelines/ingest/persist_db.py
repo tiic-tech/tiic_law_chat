@@ -90,6 +90,8 @@ def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, 
                 "section_path": section_path,
                 "start_offset": _coerce_int(n.get("start_offset")),
                 "end_offset": _coerce_int(n.get("end_offset")),
+                "page_start_offset": _coerce_int(n.get("page_start_offset")),
+                "page_end_offset": _coerce_int(n.get("page_end_offset")),
                 META_DATA_KEY: n.get(META_DATA_KEY) or {},
             }
         )

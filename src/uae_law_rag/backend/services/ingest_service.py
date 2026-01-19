@@ -624,6 +624,14 @@ async def ingest_file(
         if not node_dicts:
             raise ValueError("segment produced no nodes")  # docstring: 禁止空节点集合
 
+        # docstring: attach page-local offsets for replay/highlight (P0-2d)
+        try:
+            md_text = str((parsed or {}).get("markdown") or "")
+        except Exception:
+            md_text = ""
+        if md_text.strip():
+            node_dicts = normalize_offsets_to_page_local(node_dicts=node_dicts, markdown=md_text)
+
         state = _advance_state(state, STATE_EMBEDDING)  # docstring: 状态推进到 EMBEDDING
         current_stage = "embed"
         embed_provider = getattr(kb, "embed_provider", "ollama")

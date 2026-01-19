@@ -214,13 +214,13 @@ class RetrievalHitModel(Base, TimestampMixin):
     start_offset: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        comment="起始偏移快照（可选，冗余自 Node）",  # docstring: 证据定位辅助
+        comment="页内起始偏移快照（冗余自 Node）",  # docstring: 证据定位辅助
     )
 
     end_offset: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        comment="结束偏移快照（可选，冗余自 Node）",  # docstring: 证据定位辅助
+        comment="页内结束偏移快照（冗余自 Node）",  # docstring: 证据定位辅助
     )
 
     article_id: Mapped[Optional[str]] = mapped_column(

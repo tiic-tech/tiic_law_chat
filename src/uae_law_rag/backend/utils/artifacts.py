@@ -119,8 +119,9 @@ def normalize_offsets_to_page_local(
     markdown: str,
 ) -> List[dict]:
     """
-    [职责] 将 node_dicts 中的 start_offset/end_offset（全量绝对 offset）转换为页内 offset。
-    [边界] 若 node 未提供 page 或 offset，则保持原值；若 page mark 缺失，则按单页处理。
+    [职责] 基于 <!-- page: N --> 的全量起点，将 node_dicts 的 doc-level start/end 转换为页内 offset，
+          写入 page_start_offset/page_end_offset（不覆盖原 start_offset/end_offset）。
+    [边界] 若 node 未提供 page 或 start/end，则不写页内 offset；若缺 page mark，则按单页 {1:0} 处理。
     """
     page_start = build_page_start_index(markdown)
     if not page_start:
@@ -141,7 +142,7 @@ def normalize_offsets_to_page_local(
 
         base = page_start.get(page_i)
         if base is None:
-            # page 不在 index 中：按单页/或异常数据回退为不转换
+            # page 不在 index 中：异常数据，不写页内 offset
             out.append(d)
             continue
 
@@ -155,13 +156,21 @@ def normalize_offsets_to_page_local(
 
         s = _coerce_int(d.get("start_offset"))
         e = _coerce_int(d.get("end_offset"))
+        # docstring: 只写 page_*，不覆盖原 start/end（原 start/end 仍为 doc 全量 offset）
         if s is not None:
-            d["start_offset"] = max(0, s - int(base))
+            page_s = s - int(base)
+            if page_s < 0:
+                raise ValueError(f"page_start_offset < 0 (page={page_i}, start_offset={s}, base={base})")
+            d["page_start_offset"] = int(page_s)
         if e is not None:
-            d["end_offset"] = max(0, e - int(base))
-        # 可选：记录转换信息，便于审计/回滚
+            page_e = e - int(base)
+            if page_e < 0:
+                raise ValueError(f"page_end_offset < 0 (page={page_i}, end_offset={e}, base={base})")
+            d["page_end_offset"] = int(page_e)
+
+        # docstring: 记录 offset 模式（审计用）
         meta = dict(d.get("meta_data") or d.get("meta") or {})
-        meta.setdefault("offset_mode", "page_local")
+        meta.setdefault("offset_mode", "doc_global+page_local")
         d["meta_data"] = meta
         out.append(d)
 

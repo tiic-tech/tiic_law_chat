@@ -182,6 +182,8 @@ class IngestRepo:
                 page=n.get("page"),  # docstring: 页码
                 start_offset=n.get("start_offset"),  # docstring: 起始偏移
                 end_offset=n.get("end_offset"),  # docstring: 结束偏移
+                page_start_offset=n.get("page_start_offset"),  # docstring: 起始偏移
+                page_end_offset=n.get("page_end_offset"),  # docstring: 结束偏移
                 article_id=n.get("article_id"),  # docstring: 法条标识
                 section_path=n.get("section_path"),  # docstring: 结构路径
                 meta_data=n.get(META_DATA_KEY) or {},  # docstring: 扩展元数据

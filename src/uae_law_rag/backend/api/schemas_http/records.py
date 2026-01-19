@@ -197,6 +197,9 @@ class NodeRecordView(BaseModel):
     start_offset: Optional[int] = Field(default=None, ge=0)
     end_offset: Optional[int] = Field(default=None, ge=0)
 
+    page_start_offset: Optional[int] = Field(default=None, ge=0)
+    page_end_offset: Optional[int] = Field(default=None, ge=0)
+
     article_id: Optional[str] = Field(default=None)
     section_path: Optional[str] = Field(default=None)
 

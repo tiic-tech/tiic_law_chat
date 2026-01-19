@@ -138,22 +138,32 @@ class RetrievalRepo:
                     page = None
 
             start_offset = h.get("start_offset")
-            if start_offset is None and n is not None:
-                start_offset = getattr(n, "start_offset", None)
-
-            try:
-                start_offset = int(start_offset) if start_offset is not None else None
-            except Exception:
-                start_offset = None
+            if n is not None:
+                n_doc_s = getattr(n, "start_offset", None)
+                n_page_s = getattr(n, "page_start_offset", None)
+                # docstring: contract: hit stores page-local offsets
+                if start_offset is None:
+                    start_offset = n_page_s if n_page_s is not None else n_doc_s
+                else:
+                    # docstring: if upstream passed doc-global offsets, convert when we can
+                    try:
+                        if n_page_s is not None and n_doc_s is not None and int(start_offset) == int(n_doc_s):
+                            start_offset = n_page_s
+                    except Exception:
+                        pass
 
             end_offset = h.get("end_offset")
-            if end_offset is None and n is not None:
-                end_offset = getattr(n, "end_offset", None)
-
-            try:
-                end_offset = int(end_offset) if end_offset is not None else None
-            except Exception:
-                end_offset = None
+            if n is not None:
+                n_doc_e = getattr(n, "end_offset", None)
+                n_page_e = getattr(n, "page_end_offset", None)
+                if end_offset is None:
+                    end_offset = n_page_e if n_page_e is not None else n_doc_e
+                else:
+                    try:
+                        if n_page_e is not None and n_doc_e is not None and int(end_offset) == int(n_doc_e):
+                            end_offset = n_page_e
+                    except Exception:
+                        pass
 
             article_id = h.get("article_id")
             if article_id is None and n is not None:

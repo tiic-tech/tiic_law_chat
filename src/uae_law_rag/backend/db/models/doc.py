@@ -381,13 +381,25 @@ class NodeModel(Base, TimestampMixin):
     start_offset: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        comment="在页面/文档中的起始偏移（可选）",  # docstring: 精准定位文本位置
+        comment="在文档中的起始偏移（全量）",  # docstring: 精准定位文本位置
     )
 
     end_offset: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        comment="在页面/文档中的结束偏移（可选）",  # docstring: 精准定位文本位置
+        comment="在文档中的结束偏移（全量）",  # docstring: 精准定位文本位置
+    )
+
+    page_start_offset: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="在页面中的起始偏移（页内）",  # docstring: 精准定位文本位置
+    )
+
+    page_end_offset: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="在页面中的结束偏移（页内）",  # docstring: 精准定位文本位置
     )
 
     article_id: Mapped[Optional[str]] = mapped_column(
