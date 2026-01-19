@@ -131,6 +131,7 @@ def group_evidence_hits(
     dropped_missing_node_id = 0  # docstring: dropped hits missing node_id
     unknown_page_count = 0  # docstring: hits with unknown page
     deduped_node_count = 0  # docstring: duplicate node_id drops
+    counts_by_source: Dict[str, int] = {}  # docstring: node counts by source
 
     for hit in hits or []:
         total_hits_in += 1  # docstring: hit counter
@@ -198,6 +199,7 @@ def group_evidence_hits(
         pages[page_key].append(node_id)  # docstring: append node_id in order
         seen.add(node_id)  # docstring: track unique node_id
         total_hits_used += 1  # docstring: used hit count
+        counts_by_source[source] = counts_by_source.get(source, 0) + 1  # docstring: per-source count
 
         if doc_id not in allowed_docs:
             allowed_docs.add(doc_id)  # docstring: record allowed doc
@@ -225,6 +227,7 @@ def group_evidence_hits(
                 "deduped_node_count": deduped_node_count,
                 "total_hits_in": total_hits_in,
                 "total_hits_used": total_hits_used,
+                "counts_by_source": counts_by_source,
             },
         },
     }  # docstring: evidence grouping output

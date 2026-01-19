@@ -104,6 +104,10 @@ class RetrievalRecordView(BaseModel):
     timing_ms: TimingMs = Field(default_factory=TimingMs)  # docstring: 耗时摘要（ms）
     hits: List[HitSummary] = Field(default_factory=list)  # docstring: 命中摘要列表
 
+    hits_total: Optional[int] = Field(default=None, ge=0)  # docstring: 过滤后命中总数（分页前）
+    hits_offset: Optional[int] = Field(default=None, ge=0)  # docstring: 分页 offset
+    hits_limit: Optional[int] = Field(default=None, ge=1)  # docstring: 分页 limit
+
     # --- v1.1: staged hits for audit/eval (backward compatible) ---
     hits_by_source: Dict[str, List[HitSummary]] = Field(
         default_factory=dict

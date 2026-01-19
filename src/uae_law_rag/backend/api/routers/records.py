@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, cast
+from typing import Any, Dict, List, Optional, Sequence, Set, cast
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -336,6 +336,12 @@ async def get_retrieval_record(
         default=None,
         description="Comma-separated sources filter, e.g. keyword,vector,fused,reranked",
     ),
+    source: Optional[List[str]] = Query(
+        default=None,
+        description="Repeatable source filter, e.g. source=keyword&source=fused",
+    ),
+    limit: Optional[int] = Query(default=None, ge=1, le=5000, description="Max hits to return"),
+    offset: int = Query(default=0, ge=0, description="Hits offset"),
     group: bool = Query(default=True, description="Whether to return hits_by_source"),
     session: AsyncSession = Depends(get_session),
     trace_context: TraceContext = Depends(get_trace_context),
@@ -367,17 +373,22 @@ async def get_retrieval_record(
             s = str(v).strip()
             return s or None
 
-        def _parse_sources(raw: Optional[str]) -> Optional[Set[str]]:
-            if raw is None:
-                return None
+        def _parse_sources(raw: Optional[str], raw_list: Optional[Sequence[str]]) -> Optional[Set[str]]:
             items: List[str] = []
-            for part in str(raw).split(","):
-                p = str(part).strip().lower()
-                if p:
-                    items.append(p)
+            if raw is not None:
+                for part in str(raw).split(","):
+                    p = str(part).strip().lower()
+                    if p:
+                        items.append(p)
+            if raw_list:
+                for part in raw_list:
+                    for chunk in str(part).split(","):
+                        p = str(chunk).strip().lower()
+                        if p:
+                            items.append(p)
             return set(items) if items else None
 
-        source_filter = _parse_sources(sources)  # docstring: 可选 source 过滤集合
+        source_filter = _parse_sources(sources, source)  # docstring: 可选 source 过滤集合
 
         strategy_snapshot = RetrievalStrategySnapshot(
             keyword_top_k=_opt_int(getattr(record, "keyword_top_k", None)),
@@ -391,16 +402,32 @@ async def get_retrieval_record(
 
         timing_ms = TimingMs.model_validate(record.timing_ms or {})  # docstring: timing_ms 映射
 
-        hit_views: List[HitSummary] = []
-        hits_by_source: Dict[str, List[HitSummary]] = {}
         hit_counts: Dict[str, int] = {}  # docstring: ALWAYS computed for auditability
-
+        filtered_hits = []
         for hit in hits:
             src = _coerce_hit_source(getattr(hit, "source", None))
             # docstring: sources filter (if provided)
             if source_filter is not None:
                 if str(src or "").strip().lower() not in source_filter:
                     continue
+            k = str(src or "unknown")
+            hit_counts[k] = int(hit_counts.get(k, 0)) + 1
+            filtered_hits.append(hit)
+
+        hits_total = len(filtered_hits)  # docstring: filtered hits total
+        offset_i = int(offset) if offset is not None else 0
+        if offset_i < 0:
+            offset_i = 0
+        limit_i = int(limit) if limit is not None else None
+        if limit_i is None:
+            page_hits = filtered_hits[offset_i:]
+        else:
+            page_hits = filtered_hits[offset_i : offset_i + limit_i]
+
+        hit_views: List[HitSummary] = []
+        hits_by_source: Dict[str, List[HitSummary]] = {}
+        for hit in page_hits:
+            src = _coerce_hit_source(getattr(hit, "source", None))
             hit_views.append(
                 HitSummary(
                     node_id=NodeId(str(hit.node_id)),
@@ -412,11 +439,8 @@ async def get_retrieval_record(
                 )
             )  # docstring: 映射 HitSummary
 
-            # docstring: ALWAYS update hit_counts (even if group=false)
-            k = str(src or "unknown")
-            hit_counts[k] = int(hit_counts.get(k, 0)) + 1
-
             if group:
+                k = str(src or "unknown")
                 hits_by_source.setdefault(k, []).append(hit_views[-1])
 
         return RetrievalRecordView(
@@ -427,6 +451,9 @@ async def get_retrieval_record(
             strategy_snapshot=strategy_snapshot,
             timing_ms=timing_ms,
             hits=hit_views,
+            hits_total=int(hits_total),
+            hits_offset=int(offset_i),
+            hits_limit=int(limit_i) if limit_i is not None else None,
             hits_by_source=hits_by_source if group else {},
             hit_counts=hit_counts,
         )  # docstring: 返回检索记录视图
