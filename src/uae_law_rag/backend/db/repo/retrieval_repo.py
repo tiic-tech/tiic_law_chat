@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.retrieval import RetrievalHitModel, RetrievalRecordModel
-from ..models.doc import NodeModel
+from ..models.doc import DocumentModel, NodeModel
 
 
 class RetrievalRepo:
@@ -68,6 +68,28 @@ class RetrievalRepo:
             if not row or not row[0] or not row[1]:
                 continue
             out[str(row[0])] = str(row[1])
+        return out
+
+    async def resolve_node_documents(self, node_ids: Sequence[str]) -> Dict[str, Dict[str, str]]:
+        """
+        Resolve document_id/file_id map by node_ids.
+        [边界] 只查 NodeModel/DocumentModel 字段，不触发 relationship。
+        """
+        ids = [str(x).strip() for x in (node_ids or []) if str(x).strip()]
+        if not ids:
+            return {}
+        stmt = (
+            select(NodeModel.id, NodeModel.document_id, DocumentModel.file_id)
+            .join(DocumentModel, DocumentModel.id == NodeModel.document_id)
+            .where(NodeModel.id.in_(list(dict.fromkeys(ids))))
+        )
+        res = await self._session.execute(stmt)
+        rows = list(res.all())
+        out: Dict[str, Dict[str, str]] = {}
+        for row in rows:
+            if not row or not row[0] or not row[1] or not row[2]:
+                continue
+            out[str(row[0])] = {"document_id": str(row[1]), "file_id": str(row[2])}
         return out
 
     async def create_record(

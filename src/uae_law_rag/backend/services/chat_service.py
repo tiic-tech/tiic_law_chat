@@ -68,6 +68,7 @@ from uae_law_rag.backend.utils.errors import (
     PipelineError,
 )
 from uae_law_rag.backend.utils.logging_ import get_logger, log_event, truncate_text
+from uae_law_rag.backend.utils.evidence import group_evidence_hits
 from uae_law_rag.config import settings
 
 
@@ -617,6 +618,100 @@ async def _resolve_single_document_id(
     return doc_id
 
 
+_EVIDENCE_SOURCE_ORDER = {
+    "keyword": 0,
+    "vector": 1,
+    "fused": 2,
+    "reranked": 3,
+}  # docstring: evidence source ordering
+
+
+def _normalize_source(value: Any) -> str:
+    """
+    [Responsibility] Normalize source to lowercase string (unknown fallback).
+    [Boundary] No enum validation; unknown -> "unknown".
+    """
+    src = str(value or "").strip().lower()
+    return src or "unknown"  # docstring: source fallback
+
+
+def _coerce_rank(value: Any) -> int:
+    """
+    [Responsibility] Coerce rank to int for sorting.
+    [Boundary] Invalid values fallback to 0.
+    """
+    try:
+        return int(value)  # docstring: force int
+    except Exception:
+        return 0  # docstring: fallback
+
+
+def _sort_hits_for_evidence(hits: Sequence[Any]) -> List[Any]:
+    """
+    [Responsibility] Sort hits by source order then rank for stable evidence grouping.
+    [Boundary] Unknown source ranks after known sources.
+    """
+    return sorted(
+        list(hits or []),
+        key=lambda h: (
+            _EVIDENCE_SOURCE_ORDER.get(_normalize_source(_read_field(h, "source")), 99),
+            _coerce_rank(_read_field(h, "rank")),
+        ),
+    )
+
+
+async def _build_debug_evidence(
+    *,
+    retrieval_repo: RetrievalRepo,
+    retrieval_record_id: Optional[str],
+    max_documents: int = 20,
+    max_nodes_per_document: int = 50,
+    max_pages_per_document: int = 50,
+) -> Optional[Dict[str, Any]]:
+    """
+    [Responsibility] Build debug.evidence using staged hits from DB.
+    [Boundary] Returns None if retrieval_record_id is missing.
+    """
+    if not retrieval_record_id:
+        return None  # docstring: missing retrieval_record_id
+
+    hits = await retrieval_repo.list_hits(retrieval_record_id=str(retrieval_record_id))
+    if not hits:
+        return group_evidence_hits(
+            [],
+            max_documents=max_documents,
+            max_nodes_per_document=max_nodes_per_document,
+            max_pages_per_document=max_pages_per_document,
+        )
+
+    hits_sorted = _sort_hits_for_evidence(hits)
+    node_ids = _dedupe_node_ids([_read_field(h, "node_id") for h in hits_sorted])
+    node_map = await retrieval_repo.resolve_node_documents(node_ids)
+
+    evidence_hits: List[Dict[str, Any]] = []
+    for hit in hits_sorted:
+        node_id = _coerce_node_id(_read_field(hit, "node_id"))
+        if not node_id:
+            continue
+        meta = node_map.get(node_id) or {}
+        evidence_hits.append(
+            {
+                "node_id": node_id,
+                "document_id": meta.get("document_id"),
+                "file_id": meta.get("file_id"),
+                "page": _read_field(hit, "page"),
+                "source": _read_field(hit, "source"),
+            }
+        )
+
+    return group_evidence_hits(
+        evidence_hits,
+        max_documents=max_documents,
+        max_nodes_per_document=max_nodes_per_document,
+        max_pages_per_document=max_pages_per_document,
+    )
+
+
 def _build_debug_payload(
     *,
     retrieval_record_id: Optional[str],
@@ -629,6 +724,7 @@ def _build_debug_payload(
     timing_ms: Optional[Dict[str, Any]],
     hits_count: Optional[int],
     document_id: Optional[str],
+    evidence: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
     [职责] 组装 debug 输出（record_id/gate/provider_snapshot/timing_ms）。
@@ -663,6 +759,8 @@ def _build_debug_payload(
     }  # docstring: debug 字段集合
     if document_id:
         payload["document_id"] = str(document_id)  # docstring: debug.records.document_id
+    if evidence is not None:
+        payload["evidence"] = evidence  # docstring: debug.evidence
     return payload
 
 
@@ -1036,6 +1134,10 @@ async def chat(
                     node_ids=node_ids,
                 )
                 if debug:
+                    evidence = await _build_debug_evidence(
+                        retrieval_repo=retrieval_repo,
+                        retrieval_record_id=retrieval_record_id,
+                    )
                     debug_payload = _build_debug_payload(
                         retrieval_record_id=retrieval_record_id,
                         generation_record_id=None,
@@ -1047,6 +1149,7 @@ async def chat(
                         timing_ms={"retrieval": retrieval_timing_ms},
                         hits_count=hits_count,
                         document_id=document_id,
+                        evidence=evidence,
                     )  # docstring: debug 模式返回完整 payload
                 else:
                     debug_payload = _build_records_payload(
@@ -1181,6 +1284,10 @@ async def chat(
                 node_ids=node_ids,
             )
             if debug:
+                evidence = await _build_debug_evidence(
+                    retrieval_repo=retrieval_repo,
+                    retrieval_record_id=retrieval_record_id,
+                )
                 debug_payload = _build_debug_payload(
                     retrieval_record_id=retrieval_record_id,
                     generation_record_id=generation_record_id,
@@ -1198,6 +1305,7 @@ async def chat(
                     },
                     hits_count=hits_count,
                     document_id=document_id,
+                    evidence=evidence,
                 )  # docstring: debug 模式返回完整 payload
             else:
                 debug_payload = _build_records_payload(
