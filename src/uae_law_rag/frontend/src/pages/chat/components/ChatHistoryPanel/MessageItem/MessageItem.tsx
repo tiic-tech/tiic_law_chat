@@ -5,12 +5,27 @@
 // 下游关系: UserBubble, AssistantBubble。
 import AssistantBubble from '@/pages/chat/components/ChatHistoryPanel/MessageItem/AssistantBubble/AssistantBubble'
 import UserBubble from '@/pages/chat/components/ChatHistoryPanel/MessageItem/UserBubble'
+import { useChatStore } from '@/stores/use_chat_store'
 
-const MessageItem = () => {
+type MessageItemProps = {
+  message: { id: string; role: 'user' | 'assistant'; text: string; runId?: string }
+}
+
+const MessageItem = ({ message }: MessageItemProps) => {
+  const { runsById, ui } = useChatStore()
+
+  if (message.role === 'user') {
+    return (
+      <div className="message-item">
+        <UserBubble text={message.text} />
+      </div>
+    )
+  }
+
+  const run = message.runId ? runsById[message.runId] : undefined
   return (
     <div className="message-item">
-      <UserBubble />
-      <AssistantBubble />
+      <AssistantBubble run={run} debugOpen={ui.debugOpen} />
     </div>
   )
 }

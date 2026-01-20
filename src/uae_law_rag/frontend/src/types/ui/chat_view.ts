@@ -1,3 +1,4 @@
+// src/uae_law_rag/frontend/src/types/ui/chat_view.tx
 //docstring
 // 职责: 定义 Chat 页面 UI 视图模型（ViewModel）。
 // 边界: 只依赖 domain；不携带 HTTP DTO 或 service 逻辑。

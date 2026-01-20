@@ -1,3 +1,4 @@
+// src/uae_law_rag/frontend/src/types/ui/evidence_view.tx
 //docstring
 // 职责: 定义 EvidencePanel 的 UI 视图模型。
 // 边界: 只依赖 domain；不直接引用服务端原始结构。

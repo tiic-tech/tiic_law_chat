@@ -3,8 +3,12 @@
 // 边界: 不推断状态，不生成警告。
 // 上游关系: AssistantBubble。
 // 下游关系: 无。
-const EvaluatorBadge = () => {
-  return <div className="evaluator-badge" />
+type EvaluatorBadgeProps = {
+  status: string
+}
+
+const EvaluatorBadge = ({ status }: EvaluatorBadgeProps) => {
+  return <div className="evaluator-badge">{status}</div>
 }
 
 export default EvaluatorBadge

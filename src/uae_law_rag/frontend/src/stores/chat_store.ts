@@ -15,6 +15,13 @@ import type { ChatContextInput, ChatNormalizedResult, ChatSendInput } from '@/ty
 import type { NodePreview, PageReplay, RetrievalHitsPaged } from '@/types/domain/evidence'
 import type { RetrievalHitsQuery, NodePreviewQuery, PageReplayQuery, PageReplayByNodeQuery } from '@/services/evidence_service'
 
+export type SystemNotice = {
+  level: 'info' | 'warning' | 'error'
+  message: string
+  traceId?: string
+  requestId?: string
+}
+
 type ChatStoreState = {
   messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; runId?: string }>
   activeRunId?: string
@@ -34,6 +41,7 @@ type ChatStoreState = {
     nodePreviewById: Record<string, NodePreview>
     pageReplayByKey: Record<string, PageReplay>
   }
+  notice?: SystemNotice
 }
 
 const createInitialState = (): ChatStoreState => ({
@@ -55,9 +63,27 @@ const createInitialState = (): ChatStoreState => ({
     nodePreviewById: {},
     pageReplayByKey: {},
   },
+  notice: undefined,
 })
 
 let state: ChatStoreState = createInitialState()
+const listeners = new Set<() => void>()
+
+const emit = () => {
+  for (const listener of listeners) {
+    listener()
+  }
+}
+
+const updateState = (next: ChatStoreState) => {
+  state = next
+  emit()
+}
+
+const mergeState = (next: Partial<ChatStoreState>) => {
+  state = { ...state, ...next }
+  emit()
+}
 
 const buildRetrievalCacheKey = (
   retrievalRecordId: string,
@@ -80,7 +106,13 @@ const createMessageId = (prefix: string, runId: string): string => `${prefix}_${
 export const chatStore = {
   getState: () => state,
   setState: (next: Partial<ChatStoreState>) => {
-    state = { ...state, ...next }
+    mergeState(next)
+  },
+  subscribe: (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
   },
 
   // --- Actions (M1 minimal) ---
@@ -109,12 +141,12 @@ export const chatStore = {
       runId,
     }
 
-    state = {
+    updateState({
       ...state,
       activeRunId: runId,
       runsById: { ...state.runsById, [runId]: result },
       messages: [...state.messages, userMessage, assistantMessage],
-    }
+    })
 
     return result
   },
@@ -128,37 +160,37 @@ export const chatStore = {
   },
 
   toggleDebug: () => {
-    state = {
+    updateState({
       ...state,
       ui: { ...state.ui, debugOpen: !state.ui.debugOpen },
-    }
+    })
   },
 
   toggleEvidence: () => {
-    state = {
+    updateState({
       ...state,
       ui: { ...state.ui, evidenceOpen: !state.ui.evidenceOpen },
-    }
+    })
   },
 
   selectCitation: (nodeId: string) => {
-    state = {
+    updateState({
       ...state,
       ui: { ...state.ui, evidenceOpen: true },
       evidence: { ...state.evidence, selectedNodeId: nodeId },
-    }
+    })
   },
 
   selectNode: (nodeId: string) => {
-    state = {
+    updateState({
       ...state,
       ui: { ...state.ui, evidenceOpen: true },
       evidence: { ...state.evidence, selectedNodeId: nodeId },
-    }
+    })
   },
 
   setRetrievalPaging: (next: { sourceFilter?: string[]; offset?: number; limit?: number }) => {
-    state = {
+    updateState({
       ...state,
       evidence: {
         ...state.evidence,
@@ -166,7 +198,7 @@ export const chatStore = {
         offset: next.offset ?? state.evidence.offset,
         limit: next.limit ?? state.evidence.limit,
       },
-    }
+    })
   },
 
   fetchRetrievalHits: async (
@@ -184,7 +216,7 @@ export const chatStore = {
     if (cached) return cached
 
     const result = await loadRetrievalHits(retrievalRecordId, effectiveQuery)
-    state = {
+    updateState({
       ...state,
       cache: {
         ...state.cache,
@@ -193,7 +225,7 @@ export const chatStore = {
           [key]: result,
         },
       },
-    }
+    })
     return result
   },
 
@@ -204,7 +236,7 @@ export const chatStore = {
     const cached = state.cache.nodePreviewById[nodeId]
     if (cached) return cached
     const result = await loadNodePreview(nodeId, query)
-    state = {
+    updateState({
       ...state,
       cache: {
         ...state.cache,
@@ -213,7 +245,7 @@ export const chatStore = {
           [nodeId]: result,
         },
       },
-    }
+    })
     return result
   },
 
@@ -222,7 +254,7 @@ export const chatStore = {
     const cached = state.cache.pageReplayByKey[key]
     if (cached) return cached
     const result = await loadPageReplay(query)
-    state = {
+    updateState({
       ...state,
       cache: {
         ...state.cache,
@@ -231,7 +263,7 @@ export const chatStore = {
           [key]: result,
         },
       },
-    }
+    })
     return result
   },
 
@@ -243,7 +275,7 @@ export const chatStore = {
     const cached = state.cache.pageReplayByKey[key]
     if (cached) return cached
     const result = await loadPageReplayByNode(nodeId, query)
-    state = {
+    updateState({
       ...state,
       cache: {
         ...state.cache,
@@ -252,11 +284,15 @@ export const chatStore = {
           [key]: result,
         },
       },
-    }
+    })
     return result
   },
 
+  setNotice: (notice?: SystemNotice) => {
+    mergeState({ notice })
+  },
+
   reset: () => {
-    state = createInitialState()
+    updateState(createInitialState())
   },
 }

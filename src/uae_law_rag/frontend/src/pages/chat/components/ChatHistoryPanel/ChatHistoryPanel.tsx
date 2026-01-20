@@ -4,11 +4,16 @@
 // 上游关系: src/pages/chat/ChatPage.tsx。
 // 下游关系: MessageItem。
 import MessageItem from '@/pages/chat/components/ChatHistoryPanel/MessageItem/MessageItem'
+import { useChatStore } from '@/stores/use_chat_store'
 
 const ChatHistoryPanel = () => {
+  const { messages } = useChatStore()
+
   return (
     <section className="chat-history-panel" aria-live="polite">
-      <MessageItem />
+      {messages.map((message) => (
+        <MessageItem key={message.id} message={message} />
+      ))}
     </section>
   )
 }
