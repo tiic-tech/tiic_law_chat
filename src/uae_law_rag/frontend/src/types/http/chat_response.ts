@@ -8,10 +8,6 @@ import type { JsonObject, JsonValue, JsonValueLike } from '@/types/http/json'
 export type ChatStatus = 'success' | 'blocked' | 'partial' | 'failed'
 export type EvaluatorStatus = 'pass' | 'partial' | 'fail' | 'skipped'
 
-/**
- * Response/Debug 允许扩展字段含 undefined（JsonValueLike）
- * 用途：后端可能透传一些可选扩展字段，或前端 debug 结构需要容忍缺失
- */
 export type ChatContextConfigDTO = {
   keyword_top_k?: number
   vector_top_k?: number
@@ -29,7 +25,6 @@ export type ChatContextConfigDTO = {
   evaluator_config?: Record<string, JsonValue>
   return_records?: boolean
   return_hits?: boolean
-  [key: string]: JsonValueLike
 }
 
 /**
@@ -73,6 +68,16 @@ export type EvaluatorSummaryDTO = {
   warnings: string[]
 }
 
+export type CitationLocatorDTO = {
+  page?: number
+  start_offset?: number
+  end_offset?: number
+  article_id?: string
+  section_path?: string
+  source?: string
+  [key: string]: JsonValueLike
+}
+
 export type CitationViewDTO = {
   node_id: string
   rank?: number
@@ -80,15 +85,19 @@ export type CitationViewDTO = {
   page?: number
   article_id?: string
   section_path?: string
-  locator?: Record<string, JsonValue>
-  [key: string]: JsonValueLike
+  locator: CitationLocatorDTO
+}
+
+export type ChatGateDecisionDTO = {
+  passed?: boolean
+  status?: string
+  reasons?: string[]
 }
 
 export type ChatGateSummaryDTO = {
-  retrieval?: Record<string, JsonValue>
-  generation?: Record<string, JsonValue>
-  evaluator?: Record<string, JsonValue>
-  extra?: Record<string, JsonValue>
+  retrieval?: ChatGateDecisionDTO
+  generation?: ChatGateDecisionDTO
+  evaluator?: ChatGateDecisionDTO
 }
 
 export type DebugRecordsDTO = {
@@ -96,19 +105,91 @@ export type DebugRecordsDTO = {
   generation_record_id?: string
   evaluation_record_id?: string
   document_id?: string
-  [key: string]: JsonValueLike
 }
 
 export type DebugEnvelopeDTO = {
   trace_id: string
   request_id: string
   records: DebugRecordsDTO
-  timing_ms?: Record<string, JsonValue>
-  extra?: Record<string, JsonValue>
+  timing_ms: Record<string, JsonValue>
+}
+
+export type DebugEvidenceStatsDTO = {
+  dropped_missing_document_id: number
+  dropped_missing_node_id: number
+  unknown_page_count: number
+  deduped_node_count: number
+  total_hits_in: number
+  total_hits_used: number
+  counts_by_source: Record<string, number>
+}
+
+export type DebugEvidenceDocumentDTO = {
+  file_id: string | null
+  pages: Record<string, string[]>
+}
+
+export type DebugEvidenceSourceDTO = {
+  by_document: Record<string, DebugEvidenceDocumentDTO>
+}
+
+export type DebugEvidenceDTO = {
+  version: string
+  document_ids: string[]
+  by_source: Record<string, DebugEvidenceSourceDTO>
+  caps: {
+    max_documents: number
+    max_nodes_per_document: number
+    max_pages_per_document: number
+  }
+  meta: {
+    note: string
+    stats: DebugEvidenceStatsDTO
+  }
+}
+
+export type PromptDebugContextItemDTO = {
+  node_id: string
+  source?: string | null
+  used: 'window' | 'original_text' | 'excerpt'
+  chars: number
+}
+
+export type PromptDebugDTO = {
+  version: string
+  mode: string
+  context_items: PromptDebugContextItemDTO[]
+  totals: {
+    nodes_used: number
+    total_chars: number
+  }
+}
+
+export type KeywordStatItemDTO = {
+  keyword?: string | null
+  gt_total?: number | null
+  kw_total?: number | null
+  overlap?: number | null
+  recall?: number | null
+  precision?: number | null
+  capped?: boolean | null
+}
+
+export type KeywordStatsDTO = {
+  raw_query: string
+  keywords_list: string[]
+  items: KeywordStatItemDTO[]
+  timing_ms: Record<string, JsonValue>
+  meta: Record<string, JsonValue>
 }
 
 export type ChatDebugEnvelopeDTO = DebugEnvelopeDTO & {
   gate?: ChatGateSummaryDTO
+  provider_snapshot?: Record<string, JsonValue>
+  hits_count?: number
+  evidence?: DebugEvidenceDTO
+  prompt_debug?: PromptDebugDTO
+  keyword_stats?: KeywordStatsDTO
 }
 
 export type ChatTimingMsDTO = {
