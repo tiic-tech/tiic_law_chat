@@ -7,7 +7,7 @@ import { requestJson } from '@/api/http'
 import type { IngestRequestDTO, IngestResponseDTO } from '@/types/http/ingest_response'
 
 export const postIngest = (payload: IngestRequestDTO) => {
-  return requestJson<IngestResponseDTO>('/api/ingest', {
+  return requestJson<IngestResponseDTO>('/ingest', {
     method: 'POST',
     body: payload,
   })

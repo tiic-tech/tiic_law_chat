@@ -4,6 +4,7 @@
 // 边界: 不做业务语义转换，不依赖具体 endpoint；仅处理传输层协议与最小可解释错误信息。
 // 上游关系: src/api/endpoints/*。
 // 下游关系: 浏览器 fetch API。
+import { env } from '@/config/env'
 import type { JsonValue } from '@/types/http/json'
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -31,6 +32,8 @@ export class HttpError extends Error {
   }
 }
 
+const API_BASE = env.apiBase
+
 const getOrCreateUserId = (): string => {
   const key = 'uae_law_rag_user_id'
   const existing = localStorage.getItem(key)
@@ -56,15 +59,42 @@ function safeParseJson(text: string): JsonValue | undefined {
   }
 }
 
-export const requestJson = async <T>(url: string, options: RequestOptions = {}): Promise<T> => {
-  const { method = 'GET', headers, body, signal } = options
+const normalizeBase = (base: string): string => (base.endsWith('/') ? base.slice(0, -1) : base)
+const normalizePath = (path: string): string => (path.startsWith('/') ? path : `/${path}`)
+const isAbsoluteUrl = (path: string): boolean => /^https?:\/\//i.test(path)
 
-  const response = await fetch(url, {
-    method,
-    headers: { ...DEFAULT_HEADERS, 'x-user-id': getOrCreateUserId(), ...headers },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
-  })
+const buildUrl = (path: string): string => {
+  if (isAbsoluteUrl(path)) return path
+  const base = normalizeBase(API_BASE)
+  const suffix = normalizePath(path)
+  return base ? `${base}${suffix}` : suffix
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  return 'Network error'
+}
+
+export const requestJson = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
+  const { method = 'GET', headers, body, signal } = options
+  const url = buildUrl(path)
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { ...DEFAULT_HEADERS, 'x-user-id': getOrCreateUserId(), ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    })
+  } catch (error) {
+    throw new HttpError({
+      status: 0,
+      url,
+      method,
+      message: getErrorMessage(error),
+    })
+  }
 
   // 先读取文本，保证即使不是 JSON 也能给出可解释错误信息
   const text = await response.text()

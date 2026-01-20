@@ -16,7 +16,7 @@ export const postChat = (payload: ChatRequestDTO) => {
     kb_id: payload.kb_id ?? DEFAULT_KB_ID,
   }
 
-  return requestJson<ChatResponseDTO>('/api/chat', {
+  return requestJson<ChatResponseDTO>('/chat', {
     method: 'POST',
     headers: {
       'x-user-id': DEV_USER_ID,

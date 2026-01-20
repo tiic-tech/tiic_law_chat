@@ -5,5 +5,6 @@
 // 上游关系: Vite import.meta.env。
 // 下游关系: app 启动时可选打印，辅助联调定位。
 export const env = {
-    backendTarget: import.meta.env.VITE_BACKEND_TARGET as string | undefined,
+  apiBase: (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api',
+  backendTarget: import.meta.env.VITE_BACKEND_TARGET as string | undefined,
 }

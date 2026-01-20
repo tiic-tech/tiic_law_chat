@@ -10,6 +10,7 @@ import App from './app/App'
 import './styles/globals.css'
 
 if (import.meta.env.DEV) {
+  console.log('[env] VITE_API_BASE =', env.apiBase)
   console.log('[env] VITE_BACKEND_TARGET =', env.backendTarget)
 }
 

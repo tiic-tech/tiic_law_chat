@@ -10,7 +10,7 @@ import { defineConfig, loadEnv } from 'vite'
 export default defineConfig(({ mode }) => {
   // 关键：让 Vite 在读取 config 时也加载 .env.*（否则 process.env 拿不到）
   const env = loadEnv(mode, process.cwd(), 'VITE_')
-  const BACKEND_TARGET = env.VITE_BACKEND_TARGET ?? 'http://127.0.0.1:8000'
+  const BACKEND_TARGET = env.VITE_BACKEND_TARGET ?? 'http://127.0.0.1:18000'
 
   return {
     plugins: [react()],

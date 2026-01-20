@@ -17,3 +17,51 @@ body {
   color: #111111;
   background-color: #f7f5f2;
 }
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+}
+
+.app-shell__header {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e3ddd4;
+}
+
+.app-shell__eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #7b7367;
+}
+
+.app-shell__title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 40px);
+}
+
+.app-shell__subtitle {
+  margin: 0;
+  color: #574f45;
+}
+
+.app-shell__panel {
+  margin-top: 28px;
+  padding: 20px;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 12px 36px rgba(49, 45, 38, 0.08);
+}
+
+.app-shell__panel-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.app-shell__panel-caption {
+  margin: 0;
+  color: #6b6257;
+}

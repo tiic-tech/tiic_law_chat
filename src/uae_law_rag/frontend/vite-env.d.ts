@@ -7,6 +7,7 @@
 // 下游关系: src/config/env.ts 等读取 env 的模块。
 
 interface ImportMetaEnv {
+    readonly VITE_API_BASE?: string
     readonly VITE_BACKEND_TARGET?: string
 }
 
