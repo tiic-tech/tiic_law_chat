@@ -3,29 +3,32 @@
 // 边界: 不处理消息状态机与业务判断。
 // 上游关系: ChatHistoryPanel。
 // 下游关系: UserBubble, AssistantBubble。
+import type { ChatMessageView } from '@/types/ui'
 import AssistantBubble from '@/pages/chat/components/ChatHistoryPanel/MessageItem/AssistantBubble/AssistantBubble'
 import UserBubble from '@/pages/chat/components/ChatHistoryPanel/MessageItem/UserBubble'
-import { useChatStore } from '@/stores/use_chat_store'
 
 type MessageItemProps = {
-  message: { id: string; role: 'user' | 'assistant'; text: string; runId?: string }
+  message: ChatMessageView
+  onClickCitation: (nodeId: string) => void
 }
 
-const MessageItem = ({ message }: MessageItemProps) => {
-  const { runsById, ui } = useChatStore()
-
+const MessageItem = ({ message, onClickCitation }: MessageItemProps) => {
   if (message.role === 'user') {
     return (
       <div className="message-item">
-        <UserBubble text={message.text} />
+        <UserBubble text={message.content} />
       </div>
     )
   }
 
-  const run = message.runId ? runsById[message.runId] : undefined
   return (
     <div className="message-item">
-      <AssistantBubble run={run} debugOpen={ui.debugOpen} />
+      <AssistantBubble
+        content={message.content}
+        citations={message.citations ?? []}
+        evaluatorBadge={message.evaluatorBadge}
+        onClickCitation={onClickCitation}
+      />
     </div>
   )
 }

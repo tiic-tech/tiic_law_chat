@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import { chatStore } from '@/stores/chat_store'
+import type { ChatStore } from '@/stores/chat_store'
 
-export const useChatStore = () => {
-  return useSyncExternalStore(chatStore.subscribe, chatStore.getState, chatStore.getState)
+export const useChatStore = (store: ChatStore) => {
+  return useSyncExternalStore(store.subscribe, store.getState, store.getState)
 }

@@ -4,7 +4,7 @@
 // 上游关系: AppShell 或未来 Router 层消费。
 // 下游关系: src/pages/* 页面组件。
 import type { ReactElement } from 'react'
-import ChatPage from '@/pages/chat/ChatPage'
+import ChatPageContainer from '@/pages/chat/containers/ChatPageContainer'
 
 type AppRoute = {
   id: string
@@ -16,6 +16,6 @@ export const appRoutes: AppRoute[] = [
   {
     id: 'chat',
     path: '/chat',
-    element: <ChatPage />,
+    element: <ChatPageContainer />,
   },
 ]

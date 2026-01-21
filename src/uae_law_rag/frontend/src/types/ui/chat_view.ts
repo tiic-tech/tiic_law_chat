@@ -39,6 +39,19 @@ export type CitationView = {
   onClickRef?: CitationClickRef
 }
 
+export type ChatMessageView = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  runId?: string
+  citations?: CitationView[]
+  evaluatorBadge?: EvaluatorBadgeView
+}
+
+export type ChatHistoryView = {
+  items: ChatMessageView[]
+}
+
 export type PromptDebugView = {
   mode: string
   nodesUsed: number
@@ -81,13 +94,16 @@ export type ChatDebugView = {
 }
 
 export type ChatView = {
+  history: ChatHistoryView
   activeRun?: ActiveRunView
   citations: CitationView[]
   debug?: ChatDebugView
 }
 
+export type ChatSessionView = ChatView
+
 export type ChatPageProps = {
-  chat: ChatView
+  chat: ChatSessionView
   evidence: EvidenceView
   onSend?: (query: string) => void
   onSelectCitation?: (nodeId: string) => void

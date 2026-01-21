@@ -1,125 +1,83 @@
-import { chatStore } from '@/stores/chat_store'
-import { sendChat } from '@/services/chat_service'
-import { loadNodePreview, loadRetrievalHits } from '@/services/evidence_service'
-import type { ChatNormalizedResult } from '@/types/domain/chat'
-import type { NodePreview, RetrievalHitsPaged } from '@/types/domain/evidence'
+import { describe, expect, it, vi } from 'vitest'
+import { createChatStore } from '@/stores/chat_store'
+import type { ChatServiceSnapshot } from '@/stores/chat_store'
+import type { ChatSessionView, EvidenceView } from '@/types/ui'
+import type { NodePreview, PageReplay } from '@/types/domain/evidence'
 
-vi.mock('@/services/chat_service', () => ({
-  sendChat: vi.fn(),
-}))
+const buildSnapshot = (): ChatServiceSnapshot => {
+  const chat: ChatSessionView = {
+    history: { items: [] },
+    citations: [],
+    debug: { enabled: false },
+  }
+  const evidence: EvidenceView = {
+    retrievalHits: { items: [], page: 1, pageSize: 0, total: 0 },
+    evidenceTree: undefined,
+    nodePreview: undefined,
+  }
+  return { chat, evidence }
+}
 
-vi.mock('@/services/evidence_service', () => ({
-  loadNodePreview: vi.fn(),
-  loadRetrievalHits: vi.fn(),
-  loadPageReplay: vi.fn(),
-  loadPageReplayByNode: vi.fn(),
-}))
-
-describe('chatStore replay stability', () => {
-  const sendChatMock = vi.mocked(sendChat)
-  const loadNodePreviewMock = vi.mocked(loadNodePreview)
-  const loadRetrievalHitsMock = vi.mocked(loadRetrievalHits)
-
-  beforeEach(() => {
-    chatStore.reset()
-    vi.clearAllMocks()
-  })
-
-  it('keeps runs and cache when toggling debug', async () => {
-    const normalized: ChatNormalizedResult = {
-      run: {
-        runId: 'run-1',
-        status: 'success',
-        timing: {},
-        steps: [],
-      },
-      evidence: {
-        citations: [],
-      },
-      answer: 'hello',
-      debug: {
-        available: true,
-      },
+describe('chatStore (mocked services)', () => {
+  it('loads snapshot when switching mock mode', async () => {
+    const chatService = {
+      sendMessage: vi.fn().mockResolvedValue(buildSnapshot()),
+      getSnapshot: vi.fn().mockResolvedValue(buildSnapshot()),
+    }
+    const evidenceService = {
+      getNodePreview: vi.fn(),
+      getPageReplay: vi.fn(),
     }
 
-    const nodePreview: NodePreview = {
+    const store = createChatStore({ chatService, evidenceService })
+    await store.setMockMode('ok')
+
+    expect(chatService.getSnapshot).toHaveBeenCalledWith('ok')
+    expect(store.getState().chat.history.items).toHaveLength(0)
+  })
+
+  it('fetches node preview and updates status', async () => {
+    const preview: NodePreview = {
       nodeId: 'node-1',
       documentId: 'doc-1',
       meta: {},
       textExcerpt: 'excerpt',
     }
-
-    const retrievalHits: RetrievalHitsPaged = {
-      items: [],
-      page: 1,
-      pageSize: 10,
-      total: 0,
+    const chatService = {
+      sendMessage: vi.fn().mockResolvedValue(buildSnapshot()),
+      getSnapshot: vi.fn().mockResolvedValue(buildSnapshot()),
+    }
+    const evidenceService = {
+      getNodePreview: vi.fn().mockResolvedValue(preview),
+      getPageReplay: vi.fn(),
     }
 
-    sendChatMock.mockResolvedValue(normalized)
-    loadNodePreviewMock.mockResolvedValue(nodePreview)
-    loadRetrievalHitsMock.mockResolvedValue(retrievalHits)
+    const store = createChatStore({ chatService, evidenceService })
+    await store.fetchNodePreview('node-1')
 
-    await chatStore.send('hello', { debug: true })
-    chatStore.selectNode('node-1')
-    await chatStore.fetchNodePreview('node-1')
-    await chatStore.fetchRetrievalHits('retrieval-1', {
-      source: ['keyword'],
-      offset: 0,
-      limit: 10,
-    })
-
-    const snapshot = chatStore.getState()
-    chatStore.toggleDebug()
-    const next = chatStore.getState()
-
-    expect(next.activeRunId).toBe(snapshot.activeRunId)
-    expect(next.runsById).toEqual(snapshot.runsById)
-    expect(next.cache).toEqual(snapshot.cache)
-    expect(next.evidence.selectedNodeId).toBe(snapshot.evidence.selectedNodeId)
-    expect(next.messages).toEqual(snapshot.messages)
-    expect(next.ui.debugOpen).toBe(!snapshot.ui.debugOpen)
+    expect(store.getState().evidence.nodePreview).toEqual(preview)
+    expect(store.getState().evidenceState.nodePreviewStatus).toBe('loaded')
   })
 
-  it('uses cache for retrieval hits', async () => {
-    const normalized: ChatNormalizedResult = {
-      run: {
-        runId: 'run-2',
-        status: 'success',
-        timing: {},
-        steps: [],
-      },
-      evidence: {
-        citations: [],
-      },
-      answer: 'cached',
-      debug: {
-        available: true,
-      },
+  it('fetches page replay and updates status', async () => {
+    const replay: PageReplay = {
+      documentId: 'doc-1',
+      page: 2,
+      content: 'page content',
+    }
+    const chatService = {
+      sendMessage: vi.fn().mockResolvedValue(buildSnapshot()),
+      getSnapshot: vi.fn().mockResolvedValue(buildSnapshot()),
+    }
+    const evidenceService = {
+      getNodePreview: vi.fn(),
+      getPageReplay: vi.fn().mockResolvedValue(replay),
     }
 
-    const retrievalHits: RetrievalHitsPaged = {
-      items: [],
-      page: 1,
-      pageSize: 10,
-      total: 0,
-    }
+    const store = createChatStore({ chatService, evidenceService })
+    await store.fetchPageReplay('doc-1', 2)
 
-    sendChatMock.mockResolvedValue(normalized)
-    loadRetrievalHitsMock.mockResolvedValue(retrievalHits)
-
-    await chatStore.send('cache test')
-    await chatStore.fetchRetrievalHits('retrieval-1', {
-      source: ['keyword'],
-      offset: 0,
-      limit: 10,
-    })
-    await chatStore.fetchRetrievalHits('retrieval-1', {
-      source: ['keyword'],
-      offset: 0,
-      limit: 10,
-    })
-
-    expect(loadRetrievalHitsMock).toHaveBeenCalledTimes(1)
+    expect(store.getState().evidenceState.pageReplay).toEqual(replay)
+    expect(store.getState().evidenceState.pageReplayStatus).toBe('loaded')
   })
 })

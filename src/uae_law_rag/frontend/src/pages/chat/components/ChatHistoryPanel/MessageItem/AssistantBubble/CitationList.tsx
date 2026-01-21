@@ -3,14 +3,14 @@
 // 边界: 不合并、不重排 citation。
 // 上游关系: AssistantBubble。
 // 下游关系: EvidencePanel 联动由上层实现。
-import type { EvidenceCitation } from '@/types/domain/evidence'
+import type { CitationView } from '@/types/ui'
 
 type CitationListProps = {
-  citations: EvidenceCitation[]
-  onSelect: (nodeId: string) => void
+  citations: CitationView[]
+  onClickCitation: (nodeId: string) => void
 }
 
-const CitationList = ({ citations, onSelect }: CitationListProps) => {
+const CitationList = ({ citations, onClickCitation }: CitationListProps) => {
   if (!citations.length) {
     return <div className="citation-list">No citations</div>
   }
@@ -22,7 +22,7 @@ const CitationList = ({ citations, onSelect }: CitationListProps) => {
           key={citation.nodeId}
           type="button"
           className="citation-list__item"
-          onClick={() => onSelect(citation.nodeId)}
+          onClick={() => onClickCitation(citation.nodeId)}
         >
           {citation.nodeId}
         </button>

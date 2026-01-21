@@ -3,21 +3,33 @@
 // 边界: 不生成通知内容。
 // 上游关系: ChatPage。
 // 下游关系: 无。
-import { useChatStore } from '@/stores/use_chat_store'
 
-const SystemNoticeBar = () => {
-  const { notice } = useChatStore()
+type NoticeView = {
+  level: 'info' | 'warning' | 'error'
+  title: string
+  detail?: string
+}
 
-  if (!notice) return <div className="system-notice-bar" />
+type SystemNoticeBarProps = {
+  notice?: NoticeView
+  onDismiss?: () => void
+}
 
+const SystemNoticeBar = ({ notice, onDismiss }: SystemNoticeBarProps) => {
   return (
-    <div className={`system-notice-bar system-notice-bar--${notice.level}`}>
-      <div className="system-notice-bar__message">{notice.message}</div>
-      {(notice.traceId || notice.requestId) && (
-        <div className="system-notice-bar__meta">
-          {notice.traceId && <span>traceId: {notice.traceId}</span>}
-          {notice.requestId && <span>requestId: {notice.requestId}</span>}
-        </div>
+    <div
+      className={`system-notice-bar ${notice ? `system-notice-bar--${notice.level}` : 'system-notice-bar--empty'}`}
+    >
+      {notice ? (
+        <>
+          <div className="system-notice-bar__message">{notice.title}</div>
+          {notice.detail && <div className="system-notice-bar__meta">{notice.detail}</div>}
+          <button className="system-notice-bar__dismiss" type="button" onClick={() => onDismiss?.()}>
+            Dismiss
+          </button>
+        </>
+      ) : (
+        <span className="system-notice-bar__placeholder" aria-hidden="true" />
       )}
     </div>
   )

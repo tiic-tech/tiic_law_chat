@@ -44,6 +44,22 @@ const nodePreviewSample: NodePreview = {
 }
 
 const chatSample: ChatView = {
+  history: {
+    items: [
+      { id: 'msg-user-1', role: 'user', content: 'What is the penalty?' },
+      {
+        id: 'msg-assistant-1',
+        role: 'assistant',
+        content: 'Penalties may apply depending on enforcement.',
+        citations: [
+          {
+            nodeId: 'node001',
+            locator: { documentId: 'doc001', page: 1, start: 10, end: 120 },
+          },
+        ],
+      },
+    ],
+  },
   activeRun: {
     runId: 'run001',
     status: 'degraded',
