@@ -37,7 +37,7 @@ from uae_law_rag.backend.api.schemas_http.chat import (
     CitationView,
     EvaluatorSummary,
 )
-from uae_law_rag.backend.db.repo import MessageRepo
+from uae_law_rag.backend.db.repo import ConversationRepo, MessageRepo
 from uae_law_rag.backend.kb.repo import MilvusRepo
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.services.chat_service import chat
@@ -345,3 +345,50 @@ async def list_chat_messages(
             }
         )  # docstring: 输出消息摘要
     return items  # docstring: 返回历史列表
+
+
+@router.get("/conversations", response_model=List[Dict[str, Any]])
+async def list_conversations(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> List[Dict[str, Any]]:
+    """
+    [职责] 拉取会话列表（按 user_id 过滤）。
+    [边界] 仅做 DB 读取；不触发 pipeline。
+    [上游关系] 前端会话侧边栏。
+    [下游关系] ConversationRepo.list_by_user。
+    """
+    user_id = _resolve_user_id(request, trace_context)
+    if not user_id:
+        return []
+
+    try:
+        repo = ConversationRepo(session)
+        conversations = await repo.list_by_user(
+            user_id=str(user_id),
+            limit=int(limit),
+            offset=int(offset),
+        )
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(trace_context.trace_id),
+            request_id=str(trace_context.request_id),
+        )
+
+    items: List[Dict[str, Any]] = []
+    for conv in conversations:
+        created_at = getattr(conv, "created_at", None)
+        updated_at = getattr(conv, "updated_at", None)
+        items.append(
+            {
+                "conversation_id": str(conv.id),
+                "name": str(conv.name) if conv.name else None,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+            }
+        )
+    return items

@@ -6,6 +6,7 @@
 // 下游关系: api/http.ts, api/endpoints/*（返回 DTO）；services/*（作为 normalize 输入）。
 export * from './chat_response'
 export * from './error_response'
+export * from './chat_history'
 export * from './ingest_response'
 export * from './records_node_response'
 export * from './records_page_response'

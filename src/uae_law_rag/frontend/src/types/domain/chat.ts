@@ -5,6 +5,7 @@
 // 上游关系: pages/chat（用户输入、上下文设置）。
 // 下游关系: services/chat_service.ts（负责映射为 HTTP DTO 并发起请求）。
 import type { EvidenceIndex } from '@/types/domain/evidence'
+import type { EvaluatorSummary } from '@/types/domain/message'
 import type { RunRecord } from '@/types/domain/run'
 export type ChatContextInput = {
     keywordTopK?: number
@@ -83,4 +84,5 @@ export type ChatNormalizedResult = {
     evidence: EvidenceIndex
     answer?: string
     debug: ChatDebugState
+    evaluator?: EvaluatorSummary
 }

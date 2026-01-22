@@ -5,7 +5,8 @@
 // 上游关系: services/* 产出 view model。
 // 下游关系: pages/chat 组件。
 import type { EvidenceLocator } from '@/types/domain/evidence'
-import type { RunStatus, RunTiming } from '@/types/domain/run'
+import type { EvaluatorSummary } from '@/types/domain/message'
+import type { RunRecords, RunStatus, RunTiming } from '@/types/domain/run'
 import type { StepRecord } from '@/types/domain/step'
 import type { EvidenceView } from './evidence_view'
 
@@ -17,9 +18,12 @@ export type EvaluatorBadgeView = {
 
 export type ActiveRunView = {
   runId: string
+  conversationId?: string
   status: RunStatus
   answer?: string
   evaluatorBadge?: EvaluatorBadgeView
+  evaluatorSummary?: EvaluatorSummary
+  records?: RunRecords
   steps: StepRecord[]
   timing?: RunTiming
   providerSnapshot?: Record<string, unknown>
@@ -83,6 +87,23 @@ export type KeywordStatsView = {
 export type EvidenceSummaryView = {
   totalHits?: number
   sources?: Array<{ name: string; count: number }>
+}
+
+export type NoticeLevel = 'error' | 'warning' | 'info'
+export type NoticeKind = 'http' | 'gate' | 'evaluator' | 'unexpected'
+
+export type SystemNoticeView = {
+  level: NoticeLevel
+  kind: NoticeKind
+  title: string
+  detail?: string
+  raw?: unknown
+  meta?: {
+    requestId?: string
+    traceId?: string
+    status?: number
+    endpoint?: string
+  }
 }
 
 export type ChatDebugView = {

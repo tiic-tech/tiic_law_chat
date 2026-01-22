@@ -6,6 +6,7 @@
 // 下游关系: src/api/http.ts。
 import { requestJson } from '@/api/http'
 import type { ChatRequestDTO, ChatResponseDTO } from '@/types/http/chat_response'
+import type { ChatHistoryMessageDTO, ConversationSummaryDTO } from '@/types/http/chat_history'
 
 const DEV_USER_ID = 'dev-user' // docstring: M1 本地联调用固定 user（后续替换为 auth/session）
 const DEFAULT_KB_ID = 'default' // docstring: M1 本地联调用固定 kb（后续由 UI 选择）
@@ -22,5 +23,25 @@ export const postChat = (payload: ChatRequestDTO) => {
       'x-user-id': DEV_USER_ID,
     },
     body: next,
+  })
+}
+
+export const getChatMessages = (conversationId: string, limit = 50) => {
+  const path = `/chat/${encodeURIComponent(conversationId)}/messages?limit=${limit}`
+  return requestJson<ChatHistoryMessageDTO[]>(path, {
+    method: 'GET',
+    headers: {
+      'x-user-id': DEV_USER_ID,
+    },
+  })
+}
+
+export const getChatConversations = (limit = 50) => {
+  const path = `/chat/conversations?limit=${limit}`
+  return requestJson<ConversationSummaryDTO[]>(path, {
+    method: 'GET',
+    headers: {
+      'x-user-id': DEV_USER_ID,
+    },
   })
 }

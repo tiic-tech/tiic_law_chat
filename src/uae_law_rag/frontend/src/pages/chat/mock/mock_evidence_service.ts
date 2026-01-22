@@ -1,5 +1,5 @@
 import type { NodePreview, PageReplay, RetrievalHit } from '@/types/domain/evidence'
-import type { HitRow } from '@/types/ui'
+import type { HitRow, RetrievalHitsView } from '@/types/ui'
 import {
   NODE_PREVIEW_FAIL_ID,
   NODE_PREVIEW_OK,
@@ -11,15 +11,6 @@ import {
 export type MockEvidenceMode = 'ok' | 'error'
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-export type RetrievalHitsResult = {
-  items: HitRow[]
-  total: number
-  offset: number
-  limit: number
-  source?: string
-  availableSources: string[]
-}
 
 const mapHitRow = (hit: RetrievalHit): HitRow => {
   return {
@@ -62,11 +53,14 @@ export const createMockEvidenceService = (initialMode: MockEvidenceMode = 'ok') 
       }
       return PAGE_REPLAY_OK
     },
-    getRetrievalHits: async (params: {
-      source?: string
-      limit: number
-      offset: number
-    }): Promise<RetrievalHitsResult> => {
+    getRetrievalHits: async (
+      _retrievalRecordId: string,
+      params: {
+        source?: string
+        limit: number
+        offset: number
+      },
+    ): Promise<RetrievalHitsView> => {
       await delay(320)
       if (mode === 'error') {
         throw new Error('Mock retrieval hits error')
@@ -77,8 +71,8 @@ export const createMockEvidenceService = (initialMode: MockEvidenceMode = 'ok') 
       return {
         items: slice.map(mapHitRow),
         total: filtered.length,
-        offset,
-        limit,
+        page: limit ? Math.floor(offset / limit) + 1 : 1,
+        pageSize: limit,
         source,
         availableSources: getAvailableSources(allHits),
       }

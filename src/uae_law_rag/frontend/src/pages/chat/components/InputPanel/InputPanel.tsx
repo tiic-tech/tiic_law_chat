@@ -27,6 +27,12 @@ const InputPanel = ({ onSend, disabled }: InputPanelProps) => {
         className="input-panel__input"
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          if (disabled) return
+          void handleClick()
+        }}
         placeholder="Ask a question..."
         disabled={disabled}
       />

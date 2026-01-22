@@ -27,6 +27,7 @@ describe('chatStore (mocked services)', () => {
     const evidenceService = {
       getNodePreview: vi.fn(),
       getPageReplay: vi.fn(),
+      getRetrievalHits: vi.fn(),
     }
 
     const store = createChatStore({ chatService, evidenceService })
@@ -50,6 +51,7 @@ describe('chatStore (mocked services)', () => {
     const evidenceService = {
       getNodePreview: vi.fn().mockResolvedValue(preview),
       getPageReplay: vi.fn(),
+      getRetrievalHits: vi.fn(),
     }
 
     const store = createChatStore({ chatService, evidenceService })
@@ -72,6 +74,7 @@ describe('chatStore (mocked services)', () => {
     const evidenceService = {
       getNodePreview: vi.fn(),
       getPageReplay: vi.fn().mockResolvedValue(replay),
+      getRetrievalHits: vi.fn(),
     }
 
     const store = createChatStore({ chatService, evidenceService })
@@ -79,5 +82,53 @@ describe('chatStore (mocked services)', () => {
 
     expect(store.getState().evidenceState.pageReplay).toEqual(replay)
     expect(store.getState().evidenceState.pageReplayStatus).toBe('loaded')
+  })
+
+  it('captures backend errors without mutating history', async () => {
+    const chatService = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('backend error')),
+      getSnapshot: vi.fn().mockResolvedValue(buildSnapshot()),
+    }
+    const evidenceService = {
+      getNodePreview: vi.fn(),
+      getPageReplay: vi.fn(),
+      getRetrievalHits: vi.fn(),
+    }
+
+    const store = createChatStore({ chatService, evidenceService })
+    await store.triggerBackendError({ conversationId: 'missing-conversation' })
+
+    expect(chatService.sendMessage).toHaveBeenCalled()
+    expect(store.getState().chat.history.items).toHaveLength(0)
+    expect(store.getState().ui.notice?.level).toBe('error')
+  })
+
+  it('loads conversation history from the chat service', async () => {
+    const historySnapshot = buildSnapshot()
+    historySnapshot.chat.history = {
+      items: [
+        {
+          id: 'user_1',
+          role: 'user',
+          content: 'hello',
+        },
+      ],
+    }
+    const chatService = {
+      sendMessage: vi.fn().mockResolvedValue(buildSnapshot()),
+      getSnapshot: vi.fn().mockResolvedValue(buildSnapshot()),
+      getHistory: vi.fn().mockResolvedValue(historySnapshot),
+    }
+    const evidenceService = {
+      getNodePreview: vi.fn(),
+      getPageReplay: vi.fn(),
+      getRetrievalHits: vi.fn(),
+    }
+
+    const store = createChatStore({ chatService, evidenceService })
+    await store.loadConversationHistory('conv-1')
+
+    expect(chatService.getHistory).toHaveBeenCalledWith('conv-1')
+    expect(store.getState().chat.history.items).toHaveLength(1)
   })
 })

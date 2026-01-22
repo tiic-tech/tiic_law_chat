@@ -9,4 +9,5 @@ const metaEnv = (import.meta.env ?? {}) as Partial<ImportMetaEnv>
 export const env = {
   apiBase: metaEnv.VITE_API_BASE ?? '/api',
   backendTarget: metaEnv.VITE_BACKEND_TARGET,
+  serviceMode: metaEnv.VITE_SERVICE_MODE ?? 'mock',
 }

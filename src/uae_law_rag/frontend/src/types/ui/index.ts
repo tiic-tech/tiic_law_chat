@@ -5,4 +5,5 @@
 // 上游关系: src/types/ui/{chat view, evidence view}.ts。
 // 下游关系: pages/*, components/*（props/视图模型），避免组件直接耦合 domain 细节。
 export * from './chat_view'
+export * from './conversation_view'
 export * from './evidence_view'

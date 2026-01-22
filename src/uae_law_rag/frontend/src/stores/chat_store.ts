@@ -5,13 +5,8 @@
 // 上游关系: services/chat_service.ts 或 mock services（由 container 注入）。
 // 下游关系: pages/chat（读取状态与触发 actions）。
 import type { NodePreview, PageReplay } from '@/types/domain/evidence'
-import type { ChatSessionView, EvidenceView } from '@/types/ui'
-
-export type SystemNotice = {
-  level: 'info' | 'warning' | 'error'
-  title: string
-  detail?: string
-}
+import type { ChatMessageView, ChatSessionView, EvidenceView, SystemNoticeView } from '@/types/ui'
+import { toEvaluatorNotice, toEvaluatorStepNotice, toGateNotice, toSystemNotice } from '@/services/errors'
 
 export type EvidenceLoadStatus = 'idle' | 'loading' | 'failed' | 'loaded'
 
@@ -22,14 +17,27 @@ export type ChatServiceSnapshot = {
   evidence: EvidenceView
 }
 
+export type ChatSendOptions = {
+  mode?: ChatScenario
+  conversationId?: string
+  kbId?: string
+  debug?: boolean
+  history?: ChatMessageView[]
+}
+
 export type ChatService = {
-  sendMessage: (text: string, options?: { mode?: ChatScenario }) => Promise<ChatServiceSnapshot>
+  sendMessage: (text: string, options?: ChatSendOptions) => Promise<ChatServiceSnapshot>
   getSnapshot?: (mode?: ChatScenario) => Promise<ChatServiceSnapshot>
+  getHistory?: (conversationId: string) => Promise<ChatServiceSnapshot>
 }
 
 export type EvidenceService = {
   getNodePreview: (nodeId: string) => Promise<NodePreview>
   getPageReplay: (documentId: string, page: number) => Promise<PageReplay>
+  getRetrievalHits: (
+    retrievalRecordId: string,
+    params: { source?: string; limit: number; offset: number },
+  ) => Promise<EvidenceView['retrievalHits']>
 }
 
 export type ChatStoreState = {
@@ -37,7 +45,7 @@ export type ChatStoreState = {
   evidence: EvidenceView
   ui: {
     drawerOpen: boolean
-    notice?: SystemNotice
+    notice?: SystemNoticeView
     mockMode: ChatScenario
   }
   evidenceState: {
@@ -45,6 +53,8 @@ export type ChatStoreState = {
     nodePreviewStatus: EvidenceLoadStatus
     pageReplayStatus: EvidenceLoadStatus
     pageReplay?: PageReplay
+    retrievalHitsStatus: EvidenceLoadStatus
+    retrievalRecordId?: string
   }
 }
 
@@ -55,7 +65,7 @@ const createEmptyChatView = (): ChatSessionView => ({
 })
 
 const createEmptyEvidenceView = (): EvidenceView => ({
-  retrievalHits: { items: [], page: 1, pageSize: 0, total: 0 },
+  retrievalHits: { items: [], page: 1, pageSize: 0, total: 0, availableSources: [] },
   evidenceTree: undefined,
   nodePreview: undefined,
 })
@@ -73,30 +83,10 @@ const createInitialState = (): ChatStoreState => ({
     nodePreviewStatus: 'idle',
     pageReplayStatus: 'idle',
     pageReplay: undefined,
+    retrievalHitsStatus: 'idle',
+    retrievalRecordId: undefined,
   },
 })
-
-const buildNotice = (error: unknown): SystemNotice => {
-  if (error instanceof Error) {
-    return {
-      level: 'error',
-      title: error.message || 'Unexpected error',
-      detail: error.stack,
-    }
-  }
-
-  if (typeof error === 'string') {
-    return {
-      level: 'error',
-      title: error,
-    }
-  }
-
-  return {
-    level: 'error',
-    title: 'Unexpected error',
-  }
-}
 
 export const createChatStore = (services: { chatService: ChatService; evidenceService: EvidenceService }) => {
   let state: ChatStoreState = createInitialState()
@@ -119,27 +109,50 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
   }
 
   const applySnapshot = (snapshot: ChatServiceSnapshot) => {
+    const retrievalRecordId = snapshot.chat.activeRun?.records?.retrievalRecordId
+    const retrievalHitsStatus: EvidenceLoadStatus = retrievalRecordId
+      ? 'loading'
+      : snapshot.evidence.retrievalHits.items.length > 0
+        ? 'loaded'
+        : 'idle'
+    const runNotice =
+      toEvaluatorNotice(snapshot.chat.activeRun?.evaluatorSummary) ??
+      toEvaluatorStepNotice(snapshot.chat.activeRun?.steps) ??
+      toGateNotice(snapshot.chat.activeRun?.steps)
     setState({
       ...state,
       chat: snapshot.chat,
       evidence: snapshot.evidence,
+      ui: {
+        ...state.ui,
+        notice: runNotice,
+      },
       evidenceState: {
         ...state.evidenceState,
         selectedNodeId: undefined,
         nodePreviewStatus: 'idle',
         pageReplayStatus: 'idle',
         pageReplay: undefined,
+        retrievalHitsStatus,
+        retrievalRecordId,
+      },
+    })
+    if (retrievalRecordId) {
+      void fetchRetrievalHits(retrievalRecordId)
+    }
+  }
+
+  const setNotice = (notice: SystemNoticeView) => {
+    mergeState({
+      ui: {
+        ...state.ui,
+        notice,
       },
     })
   }
 
   const raiseNotice = (error: unknown) => {
-    mergeState({
-      ui: {
-        ...state.ui,
-        notice: buildNotice(error),
-      },
-    })
+    setNotice(toSystemNotice(error))
   }
 
   const dismissNotice = () => {
@@ -151,10 +164,54 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
     })
   }
 
-  const sendUserMessage = async (text: string) => {
+  const sendUserMessage = async (text: string, options: Omit<ChatSendOptions, 'mode' | 'history'> = {}) => {
+    const userMessage: ChatMessageView = {
+      id: `user_${Date.now().toString(36)}`,
+      role: 'user',
+      content: text,
+    }
+    const nextHistory = [...state.chat.history.items, userMessage]
+    const pendingMessage: ChatMessageView = {
+      id: `assistant_pending_${Date.now().toString(36)}`,
+      role: 'assistant',
+      content: 'Waiting for response...',
+    }
+    mergeState({
+      chat: {
+        ...state.chat,
+        history: { items: [...nextHistory, pendingMessage] },
+      },
+      ui: {
+        ...state.ui,
+        notice: undefined,
+      },
+    })
     try {
-      const snapshot = await services.chatService.sendMessage(text, { mode: state.ui.mockMode })
+      const snapshot = await services.chatService.sendMessage(text, {
+        mode: state.ui.mockMode,
+        conversationId: options.conversationId,
+        kbId: options.kbId,
+        debug: options.debug,
+        history: nextHistory,
+      })
       applySnapshot(snapshot)
+    } catch (error) {
+      mergeState({
+        chat: {
+          ...state.chat,
+          history: { items: nextHistory },
+        },
+      })
+      raiseNotice(error)
+    }
+  }
+
+  const triggerBackendError = async (options: { conversationId?: string } = {}) => {
+    const conversationId = options.conversationId ?? 'missing-conversation'
+    try {
+      await services.chatService.sendMessage('__inject_error__', {
+        conversationId,
+      })
     } catch (error) {
       raiseNotice(error)
     }
@@ -172,6 +229,16 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
 
     try {
       const snapshot = await services.chatService.getSnapshot(mode)
+      applySnapshot(snapshot)
+    } catch (error) {
+      raiseNotice(error)
+    }
+  }
+
+  const loadConversationHistory = async (conversationId: string) => {
+    if (!services.chatService.getHistory) return
+    try {
+      const snapshot = await services.chatService.getHistory(conversationId)
       applySnapshot(snapshot)
     } catch (error) {
       raiseNotice(error)
@@ -214,13 +281,14 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
           nodePreviewStatus: 'loaded',
         },
       })
-    } catch {
+    } catch (error) {
       mergeState({
         evidenceState: {
           ...state.evidenceState,
           nodePreviewStatus: 'failed',
         },
       })
+      raiseNotice(error)
     }
   }
 
@@ -243,13 +311,58 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
           pageReplay: replay,
         },
       })
-    } catch {
+    } catch (error) {
       mergeState({
         evidenceState: {
           ...state.evidenceState,
           pageReplayStatus: 'failed',
         },
       })
+      raiseNotice(error)
+    }
+  }
+
+  const fetchRetrievalHits = async (
+    retrievalRecordId?: string,
+    params: { source?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const activeRecordId = retrievalRecordId ?? state.evidenceState.retrievalRecordId
+    if (!activeRecordId) return
+    const limit = params.limit ?? 20
+    const offset = params.offset ?? 0
+    mergeState({
+      evidenceState: {
+        ...state.evidenceState,
+        retrievalHitsStatus: 'loading',
+      },
+    })
+
+    try {
+      const hits = await services.evidenceService.getRetrievalHits(activeRecordId, {
+        source: params.source,
+        limit,
+        offset,
+      })
+      setState({
+        ...state,
+        evidence: {
+          ...state.evidence,
+          retrievalHits: hits,
+        },
+        evidenceState: {
+          ...state.evidenceState,
+          retrievalHitsStatus: 'loaded',
+          retrievalRecordId: activeRecordId,
+        },
+      })
+    } catch (error) {
+      mergeState({
+        evidenceState: {
+          ...state.evidenceState,
+          retrievalHitsStatus: 'failed',
+        },
+      })
+      raiseNotice(error)
     }
   }
 
@@ -285,8 +398,12 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
     selectCitation,
     fetchNodePreview,
     fetchPageReplay,
+    fetchRetrievalHits,
+    setNotice,
     raiseNotice,
     dismissNotice,
+    triggerBackendError,
+    loadConversationHistory,
   }
 }
 

@@ -6,18 +6,21 @@
 // 下游关系: src/pages/chat/ChatPage.tsx。
 import ChatPage from '@/pages/chat/ChatPage'
 import { createMockChatService } from '@/pages/chat/mock/mock_chat_service'
-import { createMockEvidenceService, type RetrievalHitsResult } from '@/pages/chat/mock/mock_evidence_service'
+import { createMockEvidenceService } from '@/pages/chat/mock/mock_evidence_service'
+import { createLiveChatService } from '@/services/chat_service'
+import { createLiveEvidenceService } from '@/services/evidence_service'
+import { getServiceMode, setServiceMode as setServiceModeOverride, type ServiceMode } from '@/services/service_mode'
 import { createChatStore } from '@/stores/chat_store'
 import { useChatStore } from '@/stores/use_chat_store'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-const USE_MOCK = true
 type ChatScenario = 'ok' | 'no_debug' | 'empty' | 'error'
+type ChatModeOption = ChatScenario | 'live'
 
 export type ChatTopbarActions = {
-  mockMode: 'ok' | 'no_debug' | 'empty' | 'error'
+  mockMode: ChatModeOption
   drawerOpen: boolean
-  onChangeMockMode: (mode: 'ok' | 'no_debug' | 'empty' | 'error') => void
+  onChangeMockMode: (mode: ChatModeOption) => void
   onInjectError: () => void
   onToggleEvidence: () => void
 }
@@ -25,34 +28,31 @@ export type ChatTopbarActions = {
 type ChatPageContainerProps = {
   conversationId?: string
   onTopbarActionsChange?: (actions: ChatTopbarActions) => void
+  onConversationResolved?: (placeholderId: string, conversationId: string) => void
 }
 
-const conversationModeMap: Record<string, ChatScenario> = {
-  'project:tiic_law_chat': 'ok',
-  'project:tiic-rag': 'no_debug',
-  'workspace:git-version-guide': 'empty',
-  'workspace:system-innovation-notes': 'no_debug',
-}
-
-const ChatPageContainer = ({ conversationId, onTopbarActionsChange }: ChatPageContainerProps) => {
-  const services = useMemo(() => {
-    if (USE_MOCK) {
-      return {
-        chatService: createMockChatService('ok'),
-        evidenceService: createMockEvidenceService('ok'),
-      }
-    }
-
-    return {
+const ChatPageContainer = ({ conversationId, onTopbarActionsChange, onConversationResolved }: ChatPageContainerProps) => {
+  const [serviceMode, setServiceMode] = useState<ServiceMode>(() => getServiceMode())
+  const mockServices = useMemo(
+    () => ({
       chatService: createMockChatService('ok'),
       evidenceService: createMockEvidenceService('ok'),
-    }
-  }, [])
-
-  const store = useMemo(() => createChatStore(services), [services])
+    }),
+    [],
+  )
+  const liveServices = useMemo(
+    () => ({
+      chatService: createLiveChatService(),
+      evidenceService: createLiveEvidenceService(),
+    }),
+    [],
+  )
+  const mockStore = useMemo(() => createChatStore(mockServices), [mockServices])
+  const liveStore = useMemo(() => createChatStore(liveServices), [liveServices])
+  const store = serviceMode === 'live' ? liveStore : mockStore
   const state = useChatStore(store)
   const errorDrawerOpen = state.ui.notice?.level === 'error'
-  const activeConversationId = conversationId ?? 'project:tiic_law_chat'
+  const activeConversationId = conversationId ?? 'new:default'
   const [unresolvableByConversation, setUnresolvableByConversation] = useState<
     Record<string, string | undefined>
   >({})
@@ -61,23 +61,33 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange }: ChatPageCo
 
   const conversationMode = useMemo<ChatScenario>(() => {
     if (activeConversationId.startsWith('new:')) return 'empty'
-    return conversationModeMap[activeConversationId] ?? 'ok'
+    return 'ok'
   }, [activeConversationId])
 
-  const activeHitsSource = hitsSourceByConversation[activeConversationId] ?? 'all'
+  const activeHitsSource =
+    hitsSourceByConversation[activeConversationId] ?? state.evidence.retrievalHits.source ?? 'all'
   const activeUnresolvableCitation = unresolvableByConversation[activeConversationId]
   const activePageReplayOpen = pageReplayOpenByConversation[activeConversationId] ?? false
 
   useEffect(() => {
     store.toggleDrawer(false)
-    void store.setMockMode(conversationMode)
-  }, [conversationMode, store])
+    if (serviceMode === 'mock') {
+      void store.setMockMode(conversationMode)
+      return
+    }
+    if (!activeConversationId || activeConversationId.startsWith('new:')) {
+      store.reset()
+      return
+    }
+    void store.loadConversationHistory(activeConversationId)
+  }, [activeConversationId, conversationMode, serviceMode, store])
 
   const handleChangeHitsSource = useCallback(
     (source: string) => {
       setHitsSourceByConversation((prev) => ({ ...prev, [activeConversationId]: source }))
+      void store.fetchRetrievalHits(undefined, { source: source === 'all' ? undefined : source })
     },
-    [activeConversationId],
+    [activeConversationId, store],
   )
 
   const handleSelectCitation = useCallback(
@@ -106,13 +116,20 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange }: ChatPageCo
   )
 
   const handleChangeMockMode = useCallback(
-    async (mode: ChatScenario) => {
+    async (mode: ChatModeOption) => {
       setHitsSourceByConversation((prev) => ({ ...prev, [activeConversationId]: 'all' }))
       setUnresolvableByConversation((prev) => ({ ...prev, [activeConversationId]: undefined }))
       setPageReplayOpenByConversation((prev) => ({ ...prev, [activeConversationId]: false }))
-      await store.setMockMode(mode)
+      if (mode === 'live') {
+        setServiceModeOverride('live')
+        setServiceMode('live')
+        return
+      }
+      setServiceModeOverride('mock')
+      setServiceMode('mock')
+      await mockStore.setMockMode(mode)
     },
-    [activeConversationId, store],
+    [activeConversationId, mockStore],
   )
 
   const handleToggleEvidenceDrawer = useCallback(
@@ -138,48 +155,66 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange }: ChatPageCo
   }, [activeConversationId])
 
   const handleInjectError = useCallback(() => {
+    if (serviceMode === 'live') {
+      void store.triggerBackendError({ conversationId: 'missing-conversation' })
+      return
+    }
     store.raiseNotice(new Error('Injected error'))
+  }, [serviceMode, store])
+
+  const handleDismissNotice = useCallback(() => {
+    store.dismissNotice()
   }, [store])
+
+  const handleSend = useCallback(
+    async (query: string) => {
+      const isPlaceholder = activeConversationId.startsWith('new:')
+      await store.sendUserMessage(query, {
+        conversationId: serviceMode === 'live' && isPlaceholder ? undefined : activeConversationId,
+        debug: serviceMode === 'live',
+      })
+      if (serviceMode !== 'live' || !isPlaceholder) return
+      const nextConversationId = store.getState().chat.activeRun?.conversationId
+      if (!nextConversationId) return
+      onConversationResolved?.(activeConversationId, nextConversationId)
+    },
+    [activeConversationId, onConversationResolved, serviceMode, store],
+  )
 
   const topbarActions = useMemo<ChatTopbarActions>(
     () => ({
-      mockMode: state.ui.mockMode,
+      mockMode: serviceMode === 'live' ? 'live' : state.ui.mockMode,
       drawerOpen: state.ui.drawerOpen,
       onChangeMockMode: handleChangeMockMode,
       onInjectError: handleInjectError,
       onToggleEvidence: handleToggleEvidenceDrawer,
     }),
-    [handleChangeMockMode, handleInjectError, handleToggleEvidenceDrawer, state.ui.drawerOpen, state.ui.mockMode],
+    [
+      handleChangeMockMode,
+      handleInjectError,
+      handleToggleEvidenceDrawer,
+      serviceMode,
+      state.ui.drawerOpen,
+      state.ui.mockMode,
+    ],
   )
 
   useEffect(() => {
     onTopbarActionsChange?.(topbarActions)
   }, [onTopbarActionsChange, topbarActions])
 
-  const baseHits = state.evidence.retrievalHits
-  const baseAvailableSources = baseHits.availableSources ?? []
-  const baseSource = activeHitsSource === 'all' ? undefined : activeHitsSource
-  const baseFiltered = baseSource ? baseHits.items.filter((item) => item.source === baseSource) : baseHits.items
-  const resolvedHits: RetrievalHitsResult = {
-    items: baseFiltered,
-    total: baseFiltered.length,
-    offset: 0,
-    limit: baseFiltered.length,
-    source: baseSource,
-    availableSources: baseAvailableSources,
-  }
-  const resolvedStatus = baseHits.items.length > 0 ? 'loaded' : 'idle'
+  const resolvedSource = activeHitsSource === 'all' ? undefined : activeHitsSource
 
   return (
     <ChatPage
       chat={state.chat}
       evidence={state.evidence}
       retrievalHits={{
-        items: resolvedHits.items,
-        total: resolvedHits.total,
-        source: resolvedHits.source,
-        availableSources: resolvedHits.availableSources,
-        status: resolvedStatus,
+        items: state.evidence.retrievalHits.items,
+        total: state.evidence.retrievalHits.total,
+        source: resolvedSource,
+        availableSources: state.evidence.retrievalHits.availableSources ?? [],
+        status: state.evidenceState.retrievalHitsStatus,
       }}
       ui={{
         drawerOpen: state.ui.drawerOpen,
@@ -192,14 +227,14 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange }: ChatPageCo
         pageReplayOpen: activePageReplayOpen && state.ui.drawerOpen,
         unresolvableCitation: activeUnresolvableCitation,
       }}
-      onSend={store.sendUserMessage}
+      onSend={handleSend}
       onToggleDrawer={handleToggleEvidenceDrawer}
       onSelectCitation={handleSelectCitation}
       onSelectNode={store.fetchNodePreview}
       onChangeHitsSource={handleChangeHitsSource}
       onOpenPageReplay={handleOpenPageReplay}
       onClosePageReplay={handleClosePageReplay}
-      onDismissNotice={store.dismissNotice}
+      onDismissNotice={handleDismissNotice}
     />
   )
 }

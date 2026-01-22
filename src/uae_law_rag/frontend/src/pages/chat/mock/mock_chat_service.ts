@@ -29,6 +29,10 @@ export type ChatServiceSnapshot = {
 
 type ChatSendOptions = {
   mode?: MockChatMode
+  conversationId?: string
+  kbId?: string
+  debug?: boolean
+  history?: ChatMessageView[]
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -46,9 +50,12 @@ const mapEvaluatorBadge = (status: ActiveRunView['status']): EvaluatorBadgeView 
 const mapActiveRun = (result: ChatNormalizedResult): ActiveRunView => {
   return {
     runId: result.run.runId,
+    conversationId: result.run.conversationId,
     status: result.run.status,
     answer: result.answer,
     evaluatorBadge: mapEvaluatorBadge(result.run.status),
+    evaluatorSummary: result.evaluator,
+    records: result.run.records,
     steps: result.run.steps,
     timing: result.run.timing,
     providerSnapshot: result.run.providerSnapshot,

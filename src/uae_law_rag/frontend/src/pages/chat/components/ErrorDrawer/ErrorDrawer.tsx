@@ -1,16 +1,11 @@
 import type { CSSProperties } from 'react'
+import type { SystemNoticeView } from '@/types/ui'
 import { Drawer } from '@/ui/components'
-
-type NoticeView = {
-  level: 'info' | 'warning' | 'error'
-  title: string
-  detail?: string
-}
 
 type ErrorDrawerProps = {
   open: boolean
   stacked?: boolean
-  notice?: NoticeView
+  notice?: SystemNoticeView
   onClose: () => void
   onDismiss: () => void
 }

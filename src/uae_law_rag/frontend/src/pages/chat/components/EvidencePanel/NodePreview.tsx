@@ -35,10 +35,10 @@ const NodePreview = ({ status, selectedNodeId, nodePreview }: NodePreviewProps) 
           {nodePreview.page !== undefined && <span>page: {nodePreview.page}</span>}
         </div>
         <div className="node-preview__offsets">
-          <span>pageStart: {nodePreview.pageStartOffset ?? '-'}</span>
-          <span>pageEnd: {nodePreview.pageEndOffset ?? '-'}</span>
-          <span>nodeStart: {nodePreview.startOffset ?? '-'}</span>
-          <span>nodeEnd: {nodePreview.endOffset ?? '-'}</span>
+          <span>pageStart: {nodePreview.startOffset ?? '-'}</span>
+          <span>pageEnd: {nodePreview.endOffset ?? '-'}</span>
+          <span>nodeStart: {nodePreview.pageStartOffset ?? '-'}</span>
+          <span>nodeEnd: {nodePreview.pageEndOffset ?? '-'}</span>
         </div>
         <div className="node-preview__excerpt">{nodePreview.textExcerpt}</div>
       </div>

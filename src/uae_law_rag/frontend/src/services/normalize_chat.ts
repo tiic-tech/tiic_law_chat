@@ -120,7 +120,7 @@ const buildEvidenceTree = (evidence?: DebugEvidenceDTO): EvidenceTreeNode[] | un
           id: `page:${docId}:${pageKey}`,
           label: `page ${pageKey}`,
           children: (nodeIds ?? []).map((nodeId) => ({
-            id: `node:${nodeId}`,
+            id: nodeId,
             label: nodeId,
           })),
         }
@@ -225,5 +225,12 @@ export const normalizeChatResponse = (response: ChatResponseDTO): ChatNormalized
     evidence,
     answer: response.answer,
     debug,
+    evaluator: response.evaluator
+      ? {
+          status: response.evaluator.status,
+          warnings: response.evaluator.warnings,
+          ruleVersion: response.evaluator.rule_version,
+        }
+      : undefined,
   }
 }

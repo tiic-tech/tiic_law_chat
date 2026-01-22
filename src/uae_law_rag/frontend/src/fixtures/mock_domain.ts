@@ -23,6 +23,10 @@ const runOk: RunRecord = {
   queryText: 'What are the penalties for late salary payments?',
   status: 'success',
   timing: { totalMs: 1840, stages: { retrieval: 320, generation: 900, evaluator: 620 } },
+  records: {
+    retrievalRecordId: 'mock_retrieval_ok',
+    documentId: 'doc001',
+  },
   steps: stepsBase,
 }
 
@@ -33,6 +37,10 @@ const runNoDebug: RunRecord = {
   queryText: 'Explain probation period limits in UAE law.',
   status: 'degraded',
   timing: { totalMs: 1420, stages: { retrieval: 240, generation: 760, evaluator: 420 } },
+  records: {
+    retrievalRecordId: 'mock_retrieval_no_debug',
+    documentId: 'doc002',
+  },
   steps: [
     { step: 'retrieval', status: 'success', reasons: [] },
     { step: 'generation', status: 'degraded', reasons: ['noEvidence'] },

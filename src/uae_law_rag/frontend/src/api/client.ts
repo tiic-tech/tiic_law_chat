@@ -4,6 +4,8 @@
 // 上游关系: services/*。
 // 下游关系: src/api/endpoints/*。
 import {
+  getChatConversations,
+  getChatMessages,
   getNodeRecord,
   getPageRecord,
   getPageRecordByNode,
@@ -13,6 +15,8 @@ import {
 } from '@/api/endpoints'
 
 export const apiClient = {
+  getChatConversations,
+  getChatMessages,
   getNode: getNodeRecord,
   getPageReplay: getPageRecord,
   getPageReplayByNode: getPageRecordByNode,

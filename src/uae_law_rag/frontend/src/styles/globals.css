@@ -845,6 +845,31 @@ body.drawer-open {
   overflow-wrap: anywhere;
 }
 
+.system-notice-bar__detail {
+  font-family: "Source Code Pro", "SFMono-Regular", "Menlo", monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.system-notice-bar__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.system-notice-bar__toggle {
+  border: 1px solid currentColor;
+  background: transparent;
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
 .system-notice-bar__dismiss {
   justify-self: start;
   border: 1px solid currentColor;

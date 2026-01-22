@@ -11,6 +11,7 @@ import type {
   RetrievalHit,
   RetrievalHitsPaged,
 } from '@/types/domain/evidence'
+import type { HitRow, RetrievalHitsView } from '@/types/ui'
 import type { RetrievalRecordViewDTO, HitSummaryDTO } from '@/types/http/records_retrieval_response'
 import type { NodeRecordViewDTO } from '@/types/http/records_node_response'
 import type { PageRecordViewDTO } from '@/types/http/records_page_response'
@@ -109,6 +110,27 @@ const mapRetrievalRecord = (
   }
 }
 
+const mapHitRow = (hit: RetrievalHit): HitRow => {
+  return {
+    nodeId: hit.nodeId,
+    source: hit.source,
+    rank: hit.rank,
+    score: hit.score,
+    page: hit.locator?.page,
+    articleId: hit.locator?.articleId,
+    sectionPath: hit.locator?.sectionPath,
+    excerpt: hit.locator?.start !== undefined ? `Offsets ${hit.locator.start}-${hit.locator.end}` : undefined,
+  }
+}
+
+const readAvailableSources = (record: RetrievalRecordViewDTO, hits: RetrievalHit[]): string[] => {
+  const counts = record.hit_counts
+  if (counts && Object.keys(counts).length) {
+    return Object.keys(counts)
+  }
+  return Array.from(new Set(hits.map((hit) => hit.source).filter((value): value is string => Boolean(value))))
+}
+
 const mapNodePreview = (record: NodeRecordViewDTO): NodePreview => {
   return {
     nodeId: record.node_id,
@@ -143,6 +165,23 @@ export const loadRetrievalHits = async (
   return mapRetrievalRecord(record, query.source)
 }
 
+export const loadRetrievalHitsView = async (
+  retrievalRecordId: string,
+  query: RetrievalHitsQuery = {},
+): Promise<RetrievalHitsView> => {
+  const record = await apiClient.getRetrievalRecord(retrievalRecordId, query)
+  const paged = mapRetrievalRecord(record, query.source)
+  const availableSources = readAvailableSources(record, paged.items)
+  return {
+    items: paged.items.map(mapHitRow),
+    page: paged.page,
+    pageSize: paged.pageSize,
+    total: paged.total,
+    source: paged.source,
+    availableSources,
+  }
+}
+
 export const loadNodePreview = async (
   nodeId: string,
   query: NodePreviewQuery = {},
@@ -162,4 +201,17 @@ export const loadPageReplayByNode = async (
 ): Promise<PageReplay> => {
   const record = await apiClient.getPageReplayByNode(nodeId, query)
   return mapPageReplay(record)
+}
+
+export const createLiveEvidenceService = () => {
+  return {
+    getNodePreview: (nodeId: string) => loadNodePreview(nodeId),
+    getPageReplay: (documentId: string, page: number) => loadPageReplay({ documentId, page }),
+    getRetrievalHits: (retrievalRecordId: string, params: { source?: string; limit: number; offset: number }) =>
+      loadRetrievalHitsView(retrievalRecordId, {
+        source: params.source ? [params.source] : undefined,
+        limit: params.limit,
+        offset: params.offset,
+      }),
+  }
 }

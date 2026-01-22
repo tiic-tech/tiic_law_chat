@@ -12,7 +12,7 @@ import PageReplayDrawer from '@/pages/chat/components/EvidencePanel/PageReplayDr
 import RetrievalHitsTable from '@/pages/chat/components/EvidencePanel/RetrievalHitsTable'
 import InputPanel from '@/pages/chat/components/InputPanel/InputPanel'
 import type { PageReplay } from '@/types/domain/evidence'
-import type { ChatSessionView, EvidenceView } from '@/types/ui'
+import type { ChatSessionView, EvidenceView, SystemNoticeView } from '@/types/ui'
 import { Drawer } from '@/ui/components'
 
 type LoadStatus = 'idle' | 'loading' | 'failed' | 'loaded'
@@ -30,7 +30,7 @@ type ChatPageProps = {
   ui: {
     drawerOpen: boolean
     errorDrawerOpen: boolean
-    notice?: { level: 'info' | 'warning' | 'error'; title: string; detail?: string }
+    notice?: SystemNoticeView
     selectedNodeId?: string
     nodePreviewStatus: LoadStatus
     pageReplayStatus: LoadStatus
