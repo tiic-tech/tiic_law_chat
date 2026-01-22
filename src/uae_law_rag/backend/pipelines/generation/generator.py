@@ -233,7 +233,14 @@ def _resolve_llm(
     if provider_key in {"dashscope", "qwen"}:
         from llama_index.llms.dashscope import DashScope  # type: ignore  # docstring: DashScope LLM
 
+        dashscope_api_key = cfg.pop("api_key", None)  # docstring: 避免把 API key 写入快照
+        if not dashscope_api_key:
+            from uae_law_rag.config import settings  # docstring: 延迟加载 settings 读取 .env
+
+            dashscope_api_key = settings.DASHSCOPE_API_KEY
         kwargs = {"model": model, "model_name": model, **cfg}  # docstring: DashScope 参数快照
+        if dashscope_api_key:
+            kwargs["api_key"] = str(dashscope_api_key)
         return DashScope(**_filter_kwargs(DashScope.__init__, kwargs))  # docstring: 构造 DashScope LLM
     if provider_key in {"huggingface", "hf"}:
         from llama_index.llms.huggingface import HuggingFaceLLM  # type: ignore  # docstring: HF LLM

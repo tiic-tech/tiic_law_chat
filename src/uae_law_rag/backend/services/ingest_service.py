@@ -62,6 +62,7 @@ from uae_law_rag.backend.utils.artifacts import (
     write_text_atomic,
     normalize_offsets_to_page_local,
 )
+from uae_law_rag.backend.db.repo.run_config_repo import RunConfigRepo
 
 INGEST_STATUS_PENDING = "pending"
 INGEST_STATUS_SUCCESS = "success"
@@ -324,6 +325,15 @@ async def ingest_file(
 
     file_name = (str(file_name).strip() if file_name is not None else "") or pdf_path.name  # docstring: 文件名兜底
     profile = _normalize_ingest_profile(ingest_profile)  # docstring: ingest_profile 归一化
+    run_config = await RunConfigRepo(session).get_default_config()  # docstring: run_config defaults
+    if isinstance(run_config, dict):
+        raw_profile = ingest_profile or {}
+        for key in ("parser", "parse_version", "segment_version"):
+            if key in raw_profile:
+                continue  # docstring: 显式 ingest_profile 优先
+            val = run_config.get(key)
+            if val is not None and str(val).strip():
+                profile[key] = str(val).strip()  # docstring: run_config 默认值
     if profile["parser"] != "pymupdf4llm":
         raise BadRequestError(message=f"unsupported parser: {profile['parser']}")  # docstring: 固定 parser 策略
 

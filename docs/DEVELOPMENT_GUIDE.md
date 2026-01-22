@@ -83,7 +83,8 @@ Chat 服务的关键配置读取顺序（`chat_service._resolve_value`）：
 1) **Request context**（`POST /api/chat` 的 `context` 字段）  
 2) **KB 配置**（数据库表 `knowledge_base`）  
 3) **Conversation settings**（`conversation.settings`）  
-4) **默认值**（代码内默认）
+4) **Run Config**（数据库表 `run_config`）  
+5) **默认值**（代码内默认）
 
 ### 3.2 `.env`（项目根目录）
 
@@ -104,13 +105,68 @@ Chat 服务的关键配置读取顺序（`chat_service._resolve_value`）：
 - `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_CHAT_MODEL`, `DEEPSEEK_REASONER_MODEL`
 - `OLLAMA_CHAT_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_REQUEST_TIMEOUT_S`
 - `DEVICE`
+- `RERANKER_MODEL_PATH`
+- `RERANKER_DEVICE`
+- `RERANKER_TOP_N`
 
 注意：
 
 - Settings 只会读取 **自己定义的字段**。  
-- **Milvus/Debug 等环境变量不会自动从 `.env` 注入到 `os.environ`**。需要显式 `export`。
+- Provider 相关字段（OpenAI/DashScope/DeepSeek）会被自动写入 `os.environ`，确保下游 SDK 可直接读取。  
+- Milvus/Debug 等环境变量仍需显式 `export`（不通过 Settings 注入）。
 
-### 3.3 运行时环境变量（进程级）
+### 3.3 Run Config（全局默认配置）
+
+Run Config 是一张 **全局配置表**（`run_config`），用于保存系统的默认运行参数。  
+它会在 **chat/ingest 请求时自动读取**，作为默认值基线。
+
+写入方式：
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config
+```
+
+可选合并（覆盖部分字段）：
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config \
+  --config-json '{"rerank_strategy":"none","rerank_top_k":5}' \
+  --merge
+```
+
+完全自定义（传入完整 JSON）：
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config \
+  --config-json '{
+    "model_provider": "dashscope",
+    "model_name": "qwen3-max",
+    "generation_config": {
+      "temperature": 0.2,
+      "top_p": 0.9
+    },
+    "keyword_top_k": 100,
+    "vector_top_k": 30,
+    "fusion_top_k": 20,
+    "fusion_strategy": "rrf",
+    "rerank_strategy": "bge_reranker",
+    "rerank_model": "/Volumes/Workspace/Projects/RAG/tiic/models/bge-reranker-v2-m3",
+    "rerank_config": {"device": "mps"},
+    "rerank_top_k": 10
+  }'
+```
+
+Run Config 支持的核心字段（默认快照）：
+
+- Retrieval：`keyword_top_k`, `vector_top_k`, `fusion_top_k`, `rerank_top_k`,
+  `fusion_strategy`, `rerank_strategy`, `rerank_model`, `rerank_config`, `metric_type`
+- Generation：`model_provider`, `model_name`, `prompt_name`, `prompt_version`,
+  `generation_config`, `prompt_config`, `postprocess_config`, `no_evidence_use_llm`
+- Evaluator：`evaluator_config`
+- Embed（默认值，KB 优先）：`embed_provider`, `embed_model`
+- Ingest：`parser`, `parse_version`, `segment_version`
+
+### 3.4 运行时环境变量（进程级）
 
 以下变量通过 `os.getenv` 读取，必须在启动前显式 `export`：
 
@@ -137,7 +193,7 @@ export MILVUS_URI="http://127.0.0.1:19530"
 export UAE_LAW_RAG_DATABASE_URL="sqlite+aiosqlite:////absolute/path/to/.Local/uae_law_rag.db"
 ```
 
-### 3.4 前端 Vite 配置
+### 3.5 前端 Vite 配置
 
 前端只读取 `src/uae_law_rag/frontend` 目录下 `.env.*`：
 
@@ -145,9 +201,9 @@ export UAE_LAW_RAG_DATABASE_URL="sqlite+aiosqlite:////absolute/path/to/.Local/ua
 - `VITE_BACKEND_TARGET`（Vite proxy 目标，默认 `http://127.0.0.1:18000`）
 - `VITE_SERVICE_MODE`（默认 `live`）
 
-### 3.5 Provider / 模型切换方式
+### 3.6 Provider / 模型切换方式
 
-#### 3.5.1 Embedding Provider（检索向量）
+#### 3.6.1 Embedding Provider（检索向量）
 
 来源：`knowledge_base` 表字段
 
@@ -176,10 +232,10 @@ SQL
 Embedding provider allowlist（服务端硬编码）：
 
 ```
-hash | local | mock | ollama | openai
+hash | local | mock | ollama | openai | dashscope | qwen
 ```
 
-#### 3.5.2 LLM Provider（生成模型）
+#### 3.6.2 LLM Provider（生成模型）
 
 默认值：
 
@@ -221,12 +277,18 @@ openai_like | openai-like | mock | local | hash
 - `ollama` 依赖本机 Ollama 服务（默认端口 11434）
 - `local/hash/mock` 为本地确定性输出，仅用于离线/测试
 
-#### 3.5.3 可覆盖的 Chat Context 字段（HTTP）
+DashScope 说明：
+
+- 需要 `.env` 或环境变量提供 `DASHSCOPE_API_KEY`
+- 推荐设置 `DASHSCOPE_BASE_URL`（若使用兼容模式地址）
+
+#### 3.6.3 可覆盖的 Chat Context 字段（HTTP）
 
 `ChatRequest.context` 支持（见 `schemas_http/chat.py`）：
 
 - 检索：`keyword_top_k`, `vector_top_k`, `fusion_top_k`, `rerank_top_k`
 - 策略：`fusion_strategy`, `rerank_strategy`
+- 精排：`rerank_model`, `rerank_config`
 - Embed：`embed_provider`, `embed_model`, `embed_dim`
 - LLM：`model_provider`, `model_name`
 - Prompt：`prompt_name`, `prompt_version`
@@ -241,8 +303,9 @@ openai_like | openai-like | mock | local | hash
 特殊说明：
 
 - `vector_top_k=0` 会禁用向量检索（仅关键词检索）
+- `rerank_top_k` 会映射为 LlamaIndex `SentenceTransformerRerank` 的 `top_n`
 
-#### 3.5.4 Ingest 配置快照（KB / Request）
+#### 3.6.4 Ingest 配置快照（KB / Request）
 
 - KB 侧：`knowledge_base.chunking_config`
   - 常用字段：`window_size`, `window_metadata_key`, `original_text_metadata_key`
@@ -250,6 +313,97 @@ openai_like | openai-like | mock | local | hash
   - `parser`（仅支持 `pymupdf4llm`）
   - `parse_version`
   - `segment_version`
+
+#### 3.6.5 embed_dim 与 Milvus 初始化顺序（统一原则）
+
+统一原则：
+
+- **KB 的 `embed_dim` 与 Milvus collection 的 `embed_dim` 必须一致**
+- 若修改 `embed_dim`，必须 **drop 并重建** Milvus collection，再重新 ingest
+
+推荐顺序：
+
+1) 先确定 embedding 模型与其维度（参照模型文档或本地验证）
+2) 更新 KB 的 `embed_provider / embed_model / embed_dim`
+3) 使用相同 `embed_dim` 执行 `init_milvus`
+4) 执行 ingest（或重建数据）
+
+#### 3.6.6 DashScope 快速启用（LLM + Embedding）
+
+1) 确保 Key 注入：
+
+```bash
+# 方式 A：.env（推荐）
+DASHSCOPE_API_KEY=your_key
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# 方式 B：命令行显式注入
+export DASHSCOPE_API_KEY=your_key
+export DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+2) 更新 KB 的 embedding 配置（示例）：
+
+```bash
+sqlite3 .Local/uae_law_rag.db <<'SQL'
+update knowledge_base
+set embed_provider='dashscope',
+    embed_model='text-embedding-v4',
+    embed_dim=EMBED_DIM
+where id='default';
+SQL
+```
+
+> `EMBED_DIM` 必须与实际模型输出维度一致（可通过模型文档或本地调用确认）。
+
+3) 使用相同 `embed_dim` 初始化 Milvus：
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_milvus \
+  --collection kb_default \
+  --embed-dim EMBED_DIM \
+  --metric-type COSINE \
+  --drop
+```
+
+4) Chat 时指定 DashScope LLM：
+
+```bash
+curl -sS -X POST http://127.0.0.1:18000/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'x-user-id: dev-user' \
+  --data-binary @- <<'JSON' | python -m json.tool
+{
+  "query": "YOUR QUERY",
+  "kb_id": "default",
+  "context": {
+    "model_provider": "dashscope",
+    "model_name": "qwen3-max",
+    "generation_config": {
+      "temperature": 0.2
+    }
+  },
+  "debug": true
+}
+JSON
+```
+
+#### 3.6.7 本地 Reranker 默认配置（.env）
+
+若需要避免 HF 在线下载，可直接在 `.env` 中配置：
+
+```
+RERANKER_MODEL_PATH=/Volumes/Workspace/Projects/RAG/tiic/models/bge-reranker-v2-m3
+RERANKER_DEVICE=mps
+RERANKER_TOP_N=10
+```
+
+行为说明：
+
+- 会话未显式设置时，默认启用 `rerank_strategy=bge_reranker`
+- `RERANKER_MODEL_PATH` 会作为默认 `rerank_model`
+- `RERANKER_DEVICE` 会作为默认 `rerank_config.device`
+- `RERANKER_TOP_N` 会作为默认 `rerank_top_k`（并映射为 `SentenceTransformerRerank.top_n`）
 
 ---
 
@@ -269,17 +423,63 @@ PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_db --drop --seed --see
 sqlite3 .Local/uae_law_rag.db "select kb_name, milvus_collection, embed_dim from knowledge_base;"
 ```
 
-### 4.2 初始化 Milvus Collection
+### 4.2 更新 KB 配置（Embed Provider/Model/Dim）
+
+如果使用 dashscope embed model，使用以下bash命令
+
+```bash
+sqlite3 .Local/uae_law_rag.db <<'SQL'
+update knowledge_base
+set embed_provider='dashscope',
+    embed_model='text-embedding-v4',
+    embed_dim=1024
+where id='default';
+SQL
+```
+
+> 仅当你需要切换 embedding provider/model 时才需要更新此步。
+
+### 4.3 初始化 Milvus Collection
 
 ```bash
 PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_milvus \
   --collection kb_default \
-  --embed-dim 384 \
+  --embed-dim EMBED_DIM \
   --metric-type COSINE \
   --drop
 ```
 
-> `embed_dim` 必须与 KB 配置一致。
+> `EMBED_DIM` 必须与 KB 配置一致（默认未改 KB 时为 384）。
+
+### 4.4 写入 Run Config（全局默认值）
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config
+```
+
+完全自定义（传入完整 JSON）：
+
+```bash
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config \
+  --config-json '{
+    "model_provider": "dashscope",
+    "model_name": "qwen3-max",
+    "generation_config": {
+      "temperature": 0.2,
+      "top_p": 0.9
+    },
+    "keyword_top_k": 100,
+    "vector_top_k": 30,
+    "fusion_top_k": 20,
+    "fusion_strategy": "rrf",
+    "rerank_strategy": "bge_reranker",
+    "rerank_model": "/Volumes/Workspace/Projects/RAG/tiic/models/bge-reranker-v2-m3",
+    "rerank_config": {"device": "mps"},
+    "rerank_top_k": 10
+  }'
+```
+
+> 建议顺序：init_db → 更新 KB → init_milvus → set_run_config → ingest
 
 ---
 
@@ -444,9 +644,9 @@ pnpm test
 
 ## 13. Docker 部署（整体打包）
 
-当前仓库未提供完整 Dockerfile。以下为 **推荐最小化方案**（需自行创建文件）。
+当前仓库已提供完整 Docker 配置，位于 `infra/docker/`。
 
-### 13.1 Backend Dockerfile（建议：`infra/docker/Dockerfile.backend`）
+### 13.1 Backend Dockerfile（`infra/docker/Dockerfile.backend`）
 
 ```dockerfile
 FROM python:3.11-slim
@@ -460,7 +660,7 @@ EXPOSE 18000
 CMD ["uvicorn", "uae_law_rag.backend.main:app", "--host", "0.0.0.0", "--port", "18000"]
 ```
 
-### 13.2 Frontend Dockerfile（建议：`infra/docker/Dockerfile.frontend`）
+### 13.2 Frontend Dockerfile（`infra/docker/Dockerfile.frontend`）
 
 ```dockerfile
 FROM node:20-slim
@@ -471,38 +671,91 @@ COPY src/uae_law_rag/frontend/pnpm-lock.yaml /app/
 RUN corepack enable && pnpm install
 
 COPY src/uae_law_rag/frontend /app
-ENV VITE_BACKEND_TARGET=http://backend:18000
-RUN pnpm build
 
 EXPOSE 5173
-CMD ["pnpm", "preview", "--host", "0.0.0.0", "--port", "5173"]
+CMD ["pnpm", "dev", "--host", "0.0.0.0", "--port", "5173"]
 ```
 
-### 13.3 全量 Compose（建议：`infra/docker/docker-compose.full.yml`）
+### 13.3 全量 Compose（`infra/docker/docker-compose.full.yml`）
 
 ```yaml
 name: uae-law-rag-full
 
 services:
-  milvus:
-    extends:
-      file: ../milvus/docker-compose.yml
-      service: milvus
-
   etcd:
-    extends:
-      file: ../milvus/docker-compose.yml
-      service: etcd
+    image: quay.io/coreos/etcd:v3.5.16
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command: >
+      etcd
+      -advertise-client-urls=http://0.0.0.0:2379
+      -listen-client-urls=http://0.0.0.0:2379
+      --data-dir=/etcd
+    volumes:
+      - etcd_data:/etcd
+    ports:
+      - "2379:2379"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   minio:
-    extends:
-      file: ../milvus/docker-compose.yml
-      service: minio
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - minio_data:/minio_data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  milvus:
+    image: milvusdb/milvus:v2.4.16
+    command: ["milvus", "run", "standalone"]
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - COMMON_SECURITY_TLSMODE=0
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
 
   attu:
-    extends:
-      file: ../milvus/docker-compose.yml
-      service: attu
+    image: zilliz/attu:latest
+    depends_on:
+      milvus:
+        condition: service_healthy
+    environment:
+      - MILVUS_URL=milvus:19530
+    ports:
+      - "8000:3000"
+    restart: unless-stopped
 
   backend:
     build:
@@ -511,6 +764,13 @@ services:
     environment:
       - MILVUS_URI=http://milvus:19530
       - UAE_LAW_RAG_DATABASE_URL=sqlite+aiosqlite:////app/.Local/uae_law_rag.db
+      - UAE_LAW_RAG_DATA_DIR=/app/.data
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - DASHSCOPE_BASE_URL=${DASHSCOPE_BASE_URL:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-}
     volumes:
       - ../../.Local:/app/.Local
       - ../../.data:/app/.data
@@ -524,13 +784,23 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.frontend
+    environment:
+      - VITE_BACKEND_TARGET=http://backend:18000
     ports:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  etcd_data:
+  minio_data:
+  milvus_data:
 ```
 
-> 如果你的 Docker Compose 版本不支持 `extends`，请将 `infra/milvus/docker-compose.yml` 中的相关服务复制到该文件内。
+说明：
+
+- 前端容器运行 Vite dev server，`/api` 会通过 `VITE_BACKEND_TARGET` 代理到后端。
+- 生产化部署可自行替换为静态构建 + Nginx（不在当前范围）。
 
 ### 13.4 Docker 启动步骤（给其他开发者）
 
@@ -538,16 +808,28 @@ services:
 git clone <your-repo>
 cd uae_law_rag
 
-# 1) 创建 Dockerfile/compose（按本节模板）
-# 2) 启动全量服务
+# 如需 DashScope/OpenAI/DeepSeek，请先在仓库根目录 .env 写入 Key
+
+# 1) 启动全量服务
 docker compose -f infra/docker/docker-compose.full.yml up -d
 
-# 3) 初始化 DB + Milvus
+# 2) 初始化 DB + Milvus
 docker compose -f infra/docker/docker-compose.full.yml exec backend \
   bash -lc "PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_db --drop --seed --seed-fts"
 
+# 2.1) 更新 KB embed 配置（可选，仅当切换 embedding 模型时）
 docker compose -f infra/docker/docker-compose.full.yml exec backend \
-  bash -lc "PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_milvus --collection kb_default --embed-dim 384 --metric-type COSINE --drop"
+  bash -lc "python - <<'PY'\nimport sqlite3\nconn = sqlite3.connect('/app/.Local/uae_law_rag.db')\ncur = conn.cursor()\ncur.execute(\"update knowledge_base set embed_provider=?, embed_model=?, embed_dim=? where id='default'\", ('dashscope', 'text-embedding-v4', 1024))\nconn.commit()\nprint('kb updated')\nPY"
+
+# 2.2) 初始化 Milvus
+docker compose -f infra/docker/docker-compose.full.yml exec backend \
+  bash -lc "PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_milvus --collection kb_default --embed-dim 1024 --metric-type COSINE --drop"
+
+# 如果未更新 KB embed_dim，请将 --embed-dim 改为 384
+
+# 3) 写入 Run Config
+docker compose -f infra/docker/docker-compose.full.yml exec backend \
+  bash -lc "PYTHONPATH=src python -m uae_law_rag.backend.scripts.set_run_config"
 
 # 4) 访问
 # frontend: http://localhost:5173/

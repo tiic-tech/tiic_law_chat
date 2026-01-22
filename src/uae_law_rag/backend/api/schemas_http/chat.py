@@ -45,6 +45,8 @@ class ChatContextConfig(BaseModel):
 
     fusion_strategy: Optional[str] = Field(default=None)  # docstring: fusion 策略
     rerank_strategy: Optional[str] = Field(default=None)  # docstring: rerank 策略
+    rerank_model: Optional[str] = Field(default=None)  # docstring: rerank 模型（可传本地路径）
+    rerank_config: Optional[Dict[str, Any]] = Field(default=None)  # docstring: rerank 额外配置
 
     embed_provider: Optional[str] = Field(default=None)  # docstring: embed provider
     embed_model: Optional[str] = Field(default=None)  # docstring: embed 模型名称

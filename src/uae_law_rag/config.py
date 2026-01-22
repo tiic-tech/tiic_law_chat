@@ -1,8 +1,10 @@
 # src/uae_law_rag/config.py
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
 
 
 def _find_repo_root(start: Path) -> Path:
@@ -23,6 +25,9 @@ def _find_repo_root(start: Path) -> Path:
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = _find_repo_root(PACKAGE_ROOT)
+
+# Load .env into process environment early so downstream SDKs can read it.
+load_dotenv(str(REPO_ROOT / ".env"), override=False)
 
 # Keep package-local workspace as defaults (dev-friendly),
 # but allow full override via environment variables.
@@ -64,13 +69,52 @@ class Settings(BaseSettings):
 
     DEVICE: str = "auto"
 
+    RERANKER_MODEL_PATH: str = "/Volumes/Workspace/Projects/RAG/tiic/models/bge-reranker-v2-m3"
+    RERANKER_DEVICE: str = "mps"
+    RERANKER_TOP_N: int = int(10)
+
     @property
     def project_root(self) -> Path:
         if not self.PROJECT_ROOT:
             raise RuntimeError("PROJECT_ROOT is not set. Please set PROJECT_ROOT in your .env file.")
         return Path(self.PROJECT_ROOT).resolve()
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(REPO_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()
+
+
+def _set_env_if_missing(key: str, value: str | None) -> None:
+    """
+    Keep provider SDKs working with .env-based Settings by exporting to os.environ.
+    Do not override explicitly provided environment variables.
+    """
+    if value is None:
+        return
+    raw = str(value).strip()
+    if not raw:
+        return
+    if os.getenv(key):
+        return
+    os.environ[key] = raw
+
+
+def _bootstrap_provider_env(s: Settings) -> None:
+    """
+    Export provider-related settings into os.environ for downstream SDKs.
+    """
+    _set_env_if_missing("OPENAI_API_KEY", s.OPENAI_API_KEY)
+    _set_env_if_missing("OPENAI_API_BASE", s.OPENAI_API_BASE)
+    _set_env_if_missing("DASHSCOPE_API_KEY", s.DASHSCOPE_API_KEY)
+    _set_env_if_missing("DASHSCOPE_BASE_URL", s.DASHSCOPE_BASE_URL)
+    _set_env_if_missing("DEEPSEEK_API_KEY", s.DEEPSEEK_API_KEY)
+    _set_env_if_missing("DEEPSEEK_BASE_URL", s.DEEPSEEK_BASE_URL)
+
+
+_bootstrap_provider_env(settings)

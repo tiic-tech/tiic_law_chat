@@ -17,6 +17,7 @@ from .doc import KnowledgeBaseModel, KnowledgeFileModel, DocumentModel, NodeMode
 from .retrieval import RetrievalRecordModel, RetrievalHitModel
 from .generation import GenerationRecordModel
 from .evaluator import EvaluationRecordModel
+from .run_config import RunConfigModel
 
 __all__ = [
     # base
@@ -37,4 +38,6 @@ __all__ = [
     "GenerationRecordModel",
     # evaluator
     "EvaluationRecordModel",
+    # run config
+    "RunConfigModel",
 ]

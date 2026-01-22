@@ -22,6 +22,7 @@ from uae_law_rag.backend.db.repo import (
     GenerationRepo,
     IngestRepo,
     MessageRepo,
+    RunConfigRepo,
     RetrievalRepo,
 )
 from uae_law_rag.backend.kb.repo import MilvusRepo
@@ -185,7 +186,7 @@ def _check_entitlement(embed: EmbedDecision) -> EmbedDecision:
     [上游关系] chat(...) 决策链路调用。
     [下游关系] 控制是否允许向量检索。
     """
-    allowlist = {"hash", "local", "mock", "ollama", "openai"}  # docstring: MVP allowlist
+    allowlist = {"hash", "local", "mock", "ollama", "openai", "dashscope", "qwen"}  # docstring: MVP allowlist
     if embed.provider in allowlist:
         return embed  # docstring: 允许使用该 provider
     return EmbedDecision(
@@ -342,6 +343,23 @@ def _build_retrieval_config(
     )
     if rerank_strategy:
         cfg["rerank_strategy"] = str(rerank_strategy)  # docstring: rerank strategy 覆盖
+    rerank_model, _ = _resolve_value(
+        key="rerank_model",
+        context=context,
+        kb={},
+        settings=settings,
+        default=None,
+    )
+    if rerank_model:
+        cfg["rerank_model"] = str(rerank_model)  # docstring: rerank model 覆盖
+    rerank_config, _ = _resolve_mapping_value(
+        keys=("rerank_config", "rerank"),
+        context=context,
+        kb={},
+        settings=settings,
+    )
+    if rerank_config:
+        cfg["rerank_config"] = dict(rerank_config)  # docstring: rerank config 覆盖
     output_fields, _ = _resolve_value(
         key="output_fields",
         context=context,
@@ -947,7 +965,25 @@ async def chat(
     kb_chat_provider = str(getattr(kb, "chat_provider", "") or "")  # docstring: chat provider 快照
     kb_chat_model = str(getattr(kb, "chat_model", "") or "")  # docstring: chat model 快照
 
-    conversation_settings = conv_settings  # docstring: 使用会话 settings 快照
+    run_config_repo = RunConfigRepo(session)  # docstring: run_config repo
+    run_config = await run_config_repo.get_default_config()  # docstring: run_config defaults
+    conversation_settings = dict(run_config or {})  # docstring: run_config 作为默认值
+    conversation_settings.update(conv_settings)  # docstring: 会话 settings 覆盖 run_config
+    if "rerank_model" not in conversation_settings:
+        model_path = str(getattr(settings, "RERANKER_MODEL_PATH", "") or "").strip()
+        if model_path:
+            conversation_settings["rerank_model"] = model_path  # docstring: 兜底本地 reranker 模型路径
+    if "rerank_top_k" not in conversation_settings:
+        top_n = getattr(settings, "RERANKER_TOP_N", None)
+        if top_n is not None:
+            conversation_settings["rerank_top_k"] = int(top_n)  # docstring: 兜底 rerank top_k
+    if "rerank_config" not in conversation_settings:
+        device = str(getattr(settings, "RERANKER_DEVICE", "") or "").strip()
+        if device:
+            conversation_settings["rerank_config"] = {"device": device}  # docstring: 兜底 rerank 设备
+    if "rerank_strategy" not in conversation_settings:
+        if str(getattr(settings, "RERANKER_MODEL_PATH", "") or "").strip():
+            conversation_settings["rerank_strategy"] = "bge_reranker"  # docstring: 兜底启用 rerank
     kb_cfg = {
         "embed_provider": kb_embed_provider,
         "embed_model": kb_embed_model,

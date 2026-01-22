@@ -1,0 +1,13 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY src/uae_law_rag/frontend/package.json /app/
+COPY src/uae_law_rag/frontend/pnpm-lock.yaml /app/
+RUN corepack enable && pnpm install
+
+COPY src/uae_law_rag/frontend /app
+
+EXPOSE 5173
+
+CMD ["pnpm", "dev", "--host", "0.0.0.0", "--port", "5173"]

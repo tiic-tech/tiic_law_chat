@@ -18,6 +18,7 @@ from .generation_repo import GenerationRepo
 from .evaluator_repo import EvaluatorRepo
 from .node_repo import NodeRepo  # noqa: F401
 from .document_repo import DocumentRepo
+from .run_config_repo import RunConfigRepo
 
 __all__ = [
     "UserRepo",
@@ -29,4 +30,5 @@ __all__ = [
     "EvaluatorRepo",
     "NodeRepo",
     "DocumentRepo",
+    "RunConfigRepo",
 ]
