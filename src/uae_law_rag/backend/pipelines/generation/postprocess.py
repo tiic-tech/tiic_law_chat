@@ -134,7 +134,7 @@ def _normalize_config(config: Optional[Mapping[str, Any]]) -> _PostprocessConfig
         max_citations=_as_opt_int("max_citations"),
         max_quote_chars=_as_int("max_quote_chars", _DEFAULT_MAX_QUOTE_CHARS),
         # NEW defaults tuned for auditability (and small models)
-        min_citations=max(1, _as_int("min_citations", 3)),
+        min_citations=max(1, _as_int("min_citations", 1)),
         # NOTE: small/local models often emit "quote" with extra markup (e.g., <!-- page -->, **bold**),
         # which is not a strict substring of hit.excerpt. Default to excerpt fallback to avoid false blocks.
         # docstring: 强制 bool，避免任何 patch 合并/编辑器自动加逗号导致 tuple 推断。
@@ -271,6 +271,49 @@ def _strip_code_fences(text: str) -> str:
     return s
 
 
+def _extract_first_json_object_region(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    [职责] 在 text 中提取第一个“完整闭合”的 JSON object 区域（{ ... }）。
+    [边界] 仅做括号平衡扫描；不保证一定可被 json.loads 解析。
+    """
+    s = str(text or "")
+    start = s.find("{")
+    if start < 0:
+        return None, "json parse error: unable to locate json object"
+
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+
+        # not in string
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1], None
+            continue
+
+    # ran to end but still not closed
+    return None, f"json parse error: incomplete json object (missing closing brace), depth={depth}"
+
+
 def _parse_json(raw_text: str, *, strict: bool) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     [职责] 解析 raw_text 为 JSON dict。
@@ -290,14 +333,23 @@ def _parse_json(raw_text: str, *, strict: bool) -> Tuple[Optional[Dict[str, Any]
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            # 2) strict fallback: allow extracting a single JSON object region
-            #    (still enforces root object)
-            start = text.find("{")
-            end = text.rfind("}")
-            if start < 0 or end < 0 or end <= start:
-                return None, "json parse error: unable to locate json object"
+            # 1.5) repair path: try to close missing braces/brackets deterministically
+            repaired = _repair_incomplete_json_object(text)
+            if repaired and repaired != text:
+                try:
+                    data = json.loads(repaired)
+                except json.JSONDecodeError:
+                    data = None
+                else:
+                    if not isinstance(data, dict):
+                        return None, "json root must be an object"
+                    return dict(data), None
+            # 2) strict fallback: extract first balanced JSON object region (still enforces root object)
+            region, region_err = _extract_first_json_object_region(text)
+            if region_err:
+                return None, region_err
             try:
-                data = json.loads(text[start : end + 1])
+                data = json.loads(region or "")
             except json.JSONDecodeError as exc2:
                 return None, f"json parse error: {exc2}"
         if not isinstance(data, dict):
@@ -305,17 +357,69 @@ def _parse_json(raw_text: str, *, strict: bool) -> Tuple[Optional[Dict[str, Any]
         return dict(data), None
 
     # --- non-strict path (existing behavior, but now after fence stripping) ---
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < 0 or end <= start:
-        return None, "json object not found"
+    region, region_err = _extract_first_json_object_region(text)
+    if region_err:
+        # keep legacy message category in non-strict mode
+        if "unable to locate" in str(region_err):
+            return None, "json object not found"
+        return None, region_err
     try:
-        data = json.loads(text[start : end + 1])
+        data = json.loads(region or "")
     except json.JSONDecodeError as exc:
         return None, f"json parse error: {exc}"
     if not isinstance(data, dict):
         return None, "json root must be an object"
     return dict(data), None
+
+
+def _repair_incomplete_json_object(text: str) -> str:
+    """
+    [职责] 尝试修复“被截断的单个 JSON object”（缺失右花括号/右中括号）。
+    [边界] 仅做括号补全；不做内容改写；只在看起来是从 '{' 开始时生效。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    start = s.find("{")
+    if start < 0:
+        return ""
+    # 仅修复从第一个 '{' 起的片段（避免前面有多余文本）
+    frag = s[start:]
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in frag:
+        if in_str:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+        else:
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                stack.append("}")
+            elif ch == "[":
+                stack.append("]")
+            elif ch == "}" or ch == "]":
+                if stack and stack[-1] == ch:
+                    stack.pop()
+                else:
+                    # 结构已经乱了，不修
+                    return ""
+    if in_str:
+        # 字符串都没闭合，修复意义不大
+        return ""
+    if not stack:
+        return frag
+    # 补全缺失的闭合符号（后进先出）
+    return frag + "".join(reversed(stack))
 
 
 def _extract_answer(payload: Mapping[str, Any]) -> Tuple[str, Optional[str]]:
@@ -612,7 +716,9 @@ def postprocess_generation(
             if not node_id_hit:
                 invalid_count += 1
                 continue
-            if allow is not None and node_id_final not in allow:
+            # IMPORTANT: in rank-fallback branch, node_id_final may still be empty here.
+            # The allow-list must be checked against the resolved hit node_id.
+            if allow is not None and str(node_id_hit).strip().lower() not in allow:
                 missing_count += 1
                 continue
             node_id_final = str(node_id_hit)
@@ -675,17 +781,9 @@ def postprocess_generation(
     output_structured["answer"] = answer  # docstring: 覆盖 answer
     output_structured["citations"] = citation_payload  # docstring: 覆盖 citations
 
-    # NEW: enforce min citations
-    if cfg.require_citations and len(citations) < cfg.min_citations:
-        n_valid_before_clear = len(citations)
-        status = "blocked"
-        answer = ""
-        citations = []
-        citation_payload = []
-        output_structured["answer"] = ""
-        output_structured["citations"] = []
-        errors = [e for e in errors if not str(e).startswith("answer")]
-        errors.append(f"insufficient citations: {n_valid_before_clear} < {cfg.min_citations}")
+    # NOTE:
+    # Do NOT clear/override early here. Defer "min citations" enforcement to the final
+    # blocked decision block so that rank normalization / marker auto-fix can run first.
 
     # NEW: normalize citation ranks to 1..N (avoid duplicated/misaligned ranks from small models)
     if citations:
@@ -735,7 +833,21 @@ def postprocess_generation(
             errors.append(f"auto_appended_rank_markers={','.join(missing_marks)}")
 
     # --- require_citations => no valid citations => BLOCKED (highest priority) ---
+    # Also enforce min_citations here (unified blocked logic).
+    need_block = False
     if cfg.require_citations and not citations:
+        need_block = True
+        if not any(
+            str(e).startswith(("citations", "no valid citations", "invalid citations", "missing citations"))
+            for e in errors
+        ):
+            errors.append("no valid citations")
+    if cfg.require_citations and citations and len(citations) < cfg.min_citations:
+        need_block = True
+        errors = [e for e in errors if not str(e).startswith("answer")]
+        errors.append(f"insufficient citations: {len(citations)} < {cfg.min_citations}")
+
+    if need_block:
         # docstring: 只要要求 citations 且最终无有效 citations，就必须 blocked；
         # 这表示“证据存在但未能产出可验证引用”，不是基础设施失败。
         status = "blocked"
@@ -744,14 +856,6 @@ def postprocess_generation(
         citation_payload = []
         output_structured["answer"] = ""
         output_structured["citations"] = []
-
-        # docstring: 避免 answer_error 抢占语义；blocked 的根因固定为 citations 不可用
-        errors = [e for e in errors if not str(e).startswith("answer")]
-        if not any(
-            str(e).startswith(("citations", "no valid citations", "invalid citations", "missing citations"))
-            for e in errors
-        ):
-            errors.append("no valid citations")
 
     error_message = "; ".join(errors) if errors else None  # docstring: 错误汇总
     return {

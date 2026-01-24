@@ -20,6 +20,7 @@ __all__ = ["build_messages", "select_generation_context_text", "select_quote_anc
 DEFAULT_PROMPT_NAME = "uae_law_grounded"  # docstring: 默认 prompt 名称
 DEFAULT_PROMPT_VERSION = "v1"  # docstring: 默认 prompt 版本
 DEFAULT_MAX_EXCERPT_CHARS = 1200  # docstring: 单条证据最大长度
+DEFAULT_MAX_EVIDENCE_ITEMS = 12  # docstring: 小模型/在线API稳态：限制证据条数，避免输出被截断
 
 _TEXT_KEYS = (
     "excerpt",
@@ -39,12 +40,13 @@ HARD RULES (must follow):
 1) Use ONLY the EVIDENCE provided. Do NOT use general knowledge.
 2) Output MUST be a single JSON object. No markdown. No prose. No code fences.
 3) Output JSON keys MUST be exactly: "answer", "citations". No extra keys.
-4) If EVIDENCE is not "(no evidence)", citations MUST contain 3 to 6 VALID citations.
+4) If EVIDENCE is not "(no evidence)", citations MUST contain at least 1 VALID citations.
 5) Each citation object MUST include:
    - "node_id": ...
    - "rank": an integer >= 1
    - "quote": REQUIRED non-empty string copied EXACTLY from EVIDENCE
-6) The answer MUST be bullet points. Each bullet MUST end with one or more citation markers like [1] or [2][3].
+6) The answer MUST be bullet points.
+   You MAY include citation markers like [1] in the answer, but it is optional.
 7) If you cannot produce >= 1 VALID citation, you MUST output exactly:
    {"answer":"","citations":[]}
 """  # docstring: system 角色与证据约束（强约束 + 明确定义 invalid citation）
@@ -136,7 +138,7 @@ def _truncate_text(text: str, *, max_chars: int) -> str:
         return ""  # docstring: 非法 max_chars 返回空
     if len(text) <= limit:
         return text  # docstring: 长度足够直接返回
-    return text[: max(limit - 3, 0)].rstrip() + "..."  # docstring: 超长时截断并加省略号
+    return text[:limit].rstrip()  # docstring: 超长时截断并加省略号
 
 
 def _normalize_excerpt(value: Any, *, max_chars: int) -> str:
@@ -499,22 +501,13 @@ def _build_user_prompt(
         "VALID NODE IDS (copy-paste EXACTLY, each is a UUID):",
         node_lines,
         "",
-        "REQUIREMENTS (strict, checklist):",
-        "A) Output exactly one JSON object with ONLY keys: answer, citations.",
-        "B) If EVIDENCE is not '(no evidence)':",
-        "   - citations MUST have >= 1 item",
-        "   - each citation MUST include node_id and rank",
-        "   - node_id MUST be copied from VALID NODE IDS (exact match)",
-        "   - rank MUST be an integer >= 1",
-        "   - NEVER output empty object {} in citations",
-        'C) If you cannot comply, output exactly: {"answer":"","citations":[]}',
-        "D) citations MUST contain EXACTLY 3 items when EVIDENCE is provided.",
-        "E) Each citation.node_id MUST be copied EXACTLY from the VALID NODE IDS list (a UUID). Do NOT output placeholder text like PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST.",
-        "",
-        "BAD OUTPUT EXAMPLES (do NOT do these):",
-        BAD_OUTPUT_EXAMPLES.strip(),
-        "",
-        "",
+        "CHECKLIST (strict):",
+        "1) Output exactly one JSON object with ONLY keys: answer, citations.",
+        "2) If EVIDENCE is not '(no evidence)': citations MUST have >= 1 item.",
+        "3) Each citation MUST include node_id (UUID) and rank (int >= 1).",
+        "4) Each citation.node_id MUST match one UUID from VALID NODE IDS (exact match).",
+        "5) quote MUST be copied EXACTLY from EVIDENCE and must be non-empty.",
+        '6) If you cannot comply, output exactly: {"answer":"","citations":[]}',
         "QUESTION:",
         query,
         "",
@@ -532,6 +525,7 @@ def build_messages(
     prompt_version: Optional[str] = None,
     node_snapshots: Optional[Mapping[str, Mapping[str, Any]]] = None,
     max_excerpt_chars: int = DEFAULT_MAX_EXCERPT_CHARS,
+    max_evidence_items: int = DEFAULT_MAX_EVIDENCE_ITEMS,
 ) -> Dict[str, Any]:
     """
     [职责] 构建 messages_snapshot（system/user + evidence + 输出结构约束）。
@@ -547,6 +541,15 @@ def build_messages(
         node_snapshots=node_snapshots,
         max_excerpt_chars=max_excerpt_chars,
     )  # docstring: evidence 列表
+
+    # docstring: 防止 prompt 过长导致模型输出被截断（JSON 不闭合）
+    try:
+        limit = int(max_evidence_items)
+    except Exception:
+        limit = DEFAULT_MAX_EVIDENCE_ITEMS
+    if limit > 0 and len(evidence_items) > limit:
+        evidence_items = list(evidence_items[:limit])
+
     prompt_debug = _build_prompt_debug(evidence_items)  # docstring: prompt_debug 统计
 
     node_ids: List[str] = []  # docstring: node_id 去重列表（用于 VALID NODE IDS）

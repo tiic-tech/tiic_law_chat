@@ -913,6 +913,7 @@ async def chat(
     ctx = PipelineContext.from_session(session, trace_context=trace_context)  # docstring: 装配 ctx
     context_dict = _normalize_context(context)  # docstring: context 归一化
     return_records = bool(context_dict.get("return_records"))  # docstring: return_records 开关
+    no_gates = bool(context_dict.get("no_gates"))  # docstring: 紧急模式：跳过 evaluator/不丢弃答案
 
     log_event(
         logger,
@@ -1260,6 +1261,82 @@ async def chat(
         generation_gate = generation_result.gate  # docstring: generation gate 记录
         await session.commit()  # docstring: 提交 generation 结果（可回放）
 
+        # docstring: === evaluator execute (optional) ===
+        if no_gates:
+            # docstring: 紧急模式：先保证能回答，后续再恢复 gate
+            evaluation_record_id = None
+            evaluator_gate = None
+            evaluation_timing_ms = None
+            evaluation_result = None
+            status = MESSAGE_STATUS_SUCCESS
+            answer_text = str(generation_bundle.answer or "").strip()
+            citations = _extract_generation_citations(generation_bundle)
+            # writeback message as success
+            msg_row = await msg_repo.get_by_id(message_id)
+            if msg_row is None:
+                raise InternalError(message="message not found for status update")
+            msg_row.response = answer_text
+            msg_row.status = status
+            msg_row.error_message = None
+            await session.flush()
+            await session.commit()
+
+            total_ms = (time.perf_counter() - start_ts) * 1000.0
+            timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}
+            evaluator_summary = {
+                "status": "skipped",
+                "rule_version": str(evaluator_config.rule_version),
+                "warnings": ["no_gates=true"],
+            }
+
+            response: Dict[str, Any] = {
+                "conversation_id": conv_id,
+                "message_id": message_id,
+                "kb_id": kb_id_final,
+                "status": status,
+                "answer": answer_text,
+                "citations": citations,
+                "evaluator": evaluator_summary,
+                TIMING_MS_KEY: timing_ms,
+                TRACE_ID_KEY: str(ctx.trace_id),
+                REQUEST_ID_KEY: str(ctx.request_id),
+            }
+            # debug/records payload 保持原逻辑（你已有）
+            if debug or return_records:
+                node_ids = _pick_node_ids_for_document_id(hits=bundle.hits, citations=citations)
+                document_id = await _resolve_single_document_id(retrieval_repo=retrieval_repo, node_ids=node_ids)
+                if debug:
+                    evidence = await _build_debug_evidence(
+                        retrieval_repo=retrieval_repo,
+                        retrieval_record_id=retrieval_record_id,
+                    )
+                    prompt_debug = _extract_prompt_debug(generation_bundle)
+                    response[DEBUG_KEY] = _build_debug_payload(
+                        retrieval_record_id=retrieval_record_id,
+                        generation_record_id=generation_record_id,
+                        evaluation_record_id=None,
+                        retrieval_gate=retrieval_gate,
+                        generation_gate=generation_gate,
+                        evaluator_gate=None,
+                        provider_snapshot=_merge_provider_snapshot(
+                            retrieval_provider_snapshot, generation_provider_snapshot, ctx.provider_snapshot
+                        ),
+                        timing_ms={"retrieval": retrieval_timing_ms, "generation": generation_timing_ms},
+                        hits_count=hits_count,
+                        document_id=document_id,
+                        evidence=evidence,
+                        prompt_debug=prompt_debug,
+                    )
+                else:
+                    response[DEBUG_KEY] = _build_records_payload(
+                        retrieval_record_id=retrieval_record_id,
+                        generation_record_id=generation_record_id,
+                        evaluation_record_id=None,
+                        hits_count=hits_count,
+                        document_id=document_id,
+                    )
+            return response
+
         # docstring: === evaluator execute ===
         state = _advance_state(state, STATE_EVALUATION_DONE)  # docstring: 状态推进到 EVALUATION_DONE
         current_stage = "evaluator"
@@ -1291,14 +1368,32 @@ async def chat(
 
         answer_text = str(generation_bundle.answer or "").strip()  # docstring: answer 输出
         citations = _extract_generation_citations(generation_bundle)  # docstring: citations 输出
-        if status not in {MESSAGE_STATUS_SUCCESS, MESSAGE_STATUS_PARTIAL}:
-            answer_text = ""  # docstring: failed 不返回 answer
-            citations = []  # docstring: failed 不返回 citations
+
+        # IMPORTANT:
+        # Do NOT blindly clear answer/citations for FAILED.
+        # If generation produced verifiable citations, keep them for auditability even when evaluator fails.
+        gen_is_blocked = str(gen_status or "").strip().lower() == "blocked"
+        has_verifiable_citations = isinstance(citations, list) and len(citations) > 0
+        has_answer = bool(answer_text)
+
+        if status == MESSAGE_STATUS_BLOCKED or gen_is_blocked:
+            # blocked semantic: no verifiable citations => no answer returned
+            answer_text = ""
+            citations = []
+        elif status == MESSAGE_STATUS_FAILED:
+            # FAILED can be evaluator-level or infra-level; keep evidence if generation produced it.
+            # Only clear when generation itself did not produce usable evidence.
+            if not (has_verifiable_citations and has_answer):
+                answer_text = ""
+                citations = []
+        # SUCCESS / PARTIAL: keep as-is
 
         msg_row = await msg_repo.get_by_id(message_id)  # docstring: 回查 message 写回状态
         if msg_row is None:
             raise InternalError(message="message not found for status update")  # docstring: message 必须存在
-        msg_row.response = answer_text  # docstring: 写回回答
+        # NOTE:
+        # Keep the same semantics as HTTP response: if we decided to expose audit evidence, store it too.
+        msg_row.response = answer_text  # docstring: 写回回答（可能为空）
         msg_row.status = status  # docstring: 写回最终状态
         if status == MESSAGE_STATUS_FAILED:
             failure_reasons = "; ".join(evaluator_gate.reasons) if evaluator_gate else ""  # docstring: 失败原因汇总

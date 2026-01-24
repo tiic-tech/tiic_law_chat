@@ -233,6 +233,20 @@ def _resolve_llm(
     if provider_key in {"dashscope", "qwen"}:
         from llama_index.llms.dashscope import DashScope  # type: ignore  # docstring: DashScope LLM
 
+        # docstring: 关键兜底：避免 JSON 输出被截断（缺失右括号/右花括号）
+        # DashScope LLM 支持 max_tokens 字段。 [oai_citation:1‡developers.llamaindex.ai](https://developers.llamaindex.ai/python/framework-api-reference/llms/dashscope/)
+        try:
+            mt = int(cfg.get("max_tokens") or 0)
+        except Exception:
+            mt = 0
+        if mt <= 0:
+            cfg["max_tokens"] = 2048  # docstring: 默认给足输出空间（你现在输出包含 citations 数组）
+        elif mt < 1024:
+            cfg["max_tokens"] = 1024  # docstring: 过小则抬高，减少截断概率
+
+        # docstring: 降低随机性，提升“结构化 JSON”稳定性
+        cfg.setdefault("temperature", 0.1)
+
         dashscope_api_key = cfg.pop("api_key", None)  # docstring: 避免把 API key 写入快照
         if not dashscope_api_key:
             from uae_law_rag.config import settings  # docstring: 延迟加载 settings 读取 .env
